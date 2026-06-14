@@ -5,11 +5,9 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from dotenv import load_dotenv
-load_dotenv()
-import llm
-from database import Base, engine, get_db
-from models import Transaction
+from . import llm
+from .database import Base, engine, get_db
+from .models import Transaction
 
 Base.metadata.create_all(bind=engine)
 
@@ -84,7 +82,3 @@ def ask(data: AskIn):
     result = llm.ask(data.question)
     return {"answer": result.get("answer"), "sql": result.get("sql"), "rows": result.get("rows")}
 
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="127.0.0.1", port=8000)

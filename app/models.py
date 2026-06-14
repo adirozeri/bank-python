@@ -4,7 +4,7 @@ from datetime import datetime
 from sqlalchemy import DateTime, Float, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
-from database import Base
+from .database import Base
 
 
 class Transaction(Base):

@@ -6,7 +6,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
 from sqlalchemy import text
 
-from database import engine
+from .database import engine
 
 SCHEMA = """
 Table: transactions
