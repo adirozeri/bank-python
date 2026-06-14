@@ -1,0 +1,44 @@
+{
+  "info": {
+    "name": "bank-python",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Health",
+      "request": { "method": "GET", "url": "http://localhost:8000/health" }
+    },
+    {
+      "name": "Create Transaction",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"account_id\": \"ACC-0001\",\n  \"amount\": 125.50,\n  \"type\": \"debit\",\n  \"status\": \"completed\",\n  \"category\": \"groceries\"\n}"
+        },
+        "url": "http://localhost:8000/transactions"
+      }
+    },
+    {
+      "name": "List Transactions",
+      "request": { "method": "GET", "url": "http://localhost:8000/transactions" }
+    },
+    {
+      "name": "Get Transaction",
+      "request": { "method": "GET", "url": "http://localhost:8000/transactions/PASTE_ID_HERE" }
+    },
+    {
+      "name": "Ask (LLM)",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"question\": \"What is the total completed debit amount per account?\"\n}"
+        },
+        "url": "http://localhost:8000/ask"
+      }
+    }
+  ]
+}

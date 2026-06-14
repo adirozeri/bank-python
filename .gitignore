@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+
+# Tooling
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Allure (Phase 4)
+allure-results/
+allure-report/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
