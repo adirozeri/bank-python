@@ -4,7 +4,11 @@ __pycache__/
 *.egg-info/
 .venv/
 venv/
+.bank-venv/
 .env
+
+# LangGraph dev server runtime cache
+.langgraph_api/
 
 # Tooling
 .pytest_cache/
@@ -19,4 +23,6 @@ allure-report/
 .DS_Store
 .idea/
 .vscode/
-.md
+
+# Local Claude guidance (don't commit)
+CLAUDE.md

@@ -1,0 +1,7 @@
+{
+    "dependencies": ["."],
+    "graphs": {
+        "bank_graph": "app.llm:graph"
+    },
+    "env": ".env"
+}

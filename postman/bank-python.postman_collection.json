@@ -29,13 +29,31 @@
       "request": { "method": "GET", "url": "http://localhost:8000/transactions/PASTE_ID_HERE" }
     },
     {
-      "name": "Ask (LLM)",
+      "name": "Ask (LLM) - Step 1: question",
       "request": {
         "method": "POST",
         "header": [{ "key": "Content-Type", "value": "application/json" }],
         "body": {
           "mode": "raw",
-          "raw": "{\n  \"question\": \"What is the total completed debit amount per account?\"\n}"
+          "raw": "{\n  \"question\": \"show me the transactions for account ACC-0001\"\n}"
+        },
+        "url": "http://localhost:8000/ask"
+      },
+      "response": [
+        {
+          "name": "needs_confirmation",
+          "body": "{\n  \"status\": \"needs_confirmation\",\n  \"thread_id\": \"<copy this into Step 2>\",\n  \"proposed_intent\": \"transactions\",\n  \"question\": \"show me the transactions for account ACC-0001\",\n  \"message\": \"Did you mean to ask about transactions?\"\n}"
+        }
+      ]
+    },
+    {
+      "name": "Ask (LLM) - Step 2: confirm intent",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"thread_id\": \"PASTE_THREAD_ID_FROM_STEP_1\",\n  \"confirm\": true\n}"
         },
         "url": "http://localhost:8000/ask"
       }
