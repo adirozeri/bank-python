@@ -123,7 +123,7 @@ curl -s https://checkip.amazonaws.com
 ```
 Use it as `<your-ip>/32` (the `/32` means "just this one address").
 
-### `<sg-id>` — the security group id (steps 1–2)
+### `sg-0d2b71e64ebd9560c` — the security group id (steps 1–2)
 You only have a `default` group; create a dedicated one (free) and capture its id:
 ```bash
 aws ec2 create-security-group --region eu-north-1 \
@@ -136,7 +136,7 @@ aws ec2 describe-security-groups --region eu-north-1 \
   --group-names bank-sg --query 'SecurityGroups[0].GroupId' --output text
 ```
 
-### `<instance-id>` / `<public-ip>` — the box itself (after step 1)
+### `i-093255880fd4c5560` / `<public-ip>` — the box itself (after step 1)
 `run-instances` returns them, or look them up after launch:
 ```bash
 # newest running instance's id:
@@ -146,11 +146,11 @@ aws ec2 describe-instances --region eu-north-1 \
 
 # its public IP (used in steps 3 and 9):
 aws ec2 describe-instances --region eu-north-1 \
-  --instance-ids <instance-id> \
+  --instance-ids i-093255880fd4c5560 \
   --query 'Reservations[].Instances[].PublicIpAddress' --output text
 ```
 
-### `<your-repo-url>` — the code to clone (step 4)
+### `https://github.com/adirozeri/bank-python.git` — the code to clone (step 4)
 Already known:
 ```
 https://github.com/adirozeri/bank-python.git
@@ -176,9 +176,9 @@ These don't exist until you create them **in Snowflake** at step 11; copy them i
 |-------------|------------------|-----------|
 | `<al2023-ami-id>` | `aws ssm get-parameter … al2023-ami-kernel-default-x86_64` | step 1 |
 | `<your-ip>` | `curl -s https://checkip.amazonaws.com` | step 2 |
-| `<sg-id>` | `aws ec2 create-security-group … bank-sg` | steps 1–2 |
-| `<instance-id>` / `<public-ip>` | `aws ec2 describe-instances …` | steps 1, 3, 9 |
-| `<your-repo-url>` | `https://github.com/adirozeri/bank-python.git` (push first!) | step 4 |
+| `sg-0d2b71e64ebd9560c` | `aws ec2 create-security-group … bank-sg` | steps 1–2 |
+| `i-093255880fd4c5560` / `<public-ip>` | `aws ec2 describe-instances …` | steps 1, 3, 9 |
+| `https://github.com/adirozeri/bank-python.git` | `https://github.com/adirozeri/bank-python.git` (push first!) | step 4 |
 | `ANTHROPIC_API_KEY` | your existing Anthropic key | step 5 |
 | Snowflake `<user>`/`<account>`/… | created in Snowflake at step 11 | steps 11–13 |
 
@@ -193,7 +193,7 @@ Or CLI:
 ```bash
 aws ec2 run-instances \
   --image-id <al2023-ami-id> --instance-type t3.micro \
-  --key-name bank-key --security-group-ids <sg-id> \
+  --key-name bank-key --security-group-ids sg-0d2b71e64ebd9560c \
   --region eu-north-1
 ```
 **What:** rents one small Linux virtual machine in AWS — the single box everything runs on.
@@ -216,11 +216,11 @@ the free tier.
 Allow inbound: **22 (SSH) from your IP only**, **8000 (the API) and 8501 (the UI) from
 `0.0.0.0/0`**.
 ```bash
-aws ec2 authorize-security-group-ingress --group-id <sg-id> \
+aws ec2 authorize-security-group-ingress --group-id sg-0d2b71e64ebd9560c \
   --protocol tcp --port 22 --cidr <your-ip>/32 --region eu-north-1
-aws ec2 authorize-security-group-ingress --group-id <sg-id> \
+aws ec2 authorize-security-group-ingress --group-id sg-0d2b71e64ebd9560c \
   --protocol tcp --port 8000 --cidr 0.0.0.0/0 --region eu-north-1
-aws ec2 authorize-security-group-ingress --group-id <sg-id> \
+aws ec2 authorize-security-group-ingress --group-id sg-0d2b71e64ebd9560c \
   --protocol tcp --port 8501 --cidr 0.0.0.0/0 --region eu-north-1   # Streamlit UI
 ```
 **What:** a security group is the instance's firewall. By default it blocks everything; you
@@ -282,13 +282,13 @@ group.
 ### 4. Get the code onto the box
 ```bash
 sudo dnf install -y git
-git clone <your-repo-url> bank-python && cd bank-python
+git clone https://github.com/adirozeri/bank-python.git bank-python && cd bank-python
 ```
 **What:** copies the project (with `Dockerfile`, `docker-compose.yml`, `app/`, etc.) onto
 the instance.
 
 **Why:** the box needs the source to **build** the image (unlike EKS, there's no ECR step —
-you build right here). `git clone` is simplest; `scp -i <key> -r . ec2-user@<ip>:bank-python`
+you build right here). `git clone` is simplest; `scp -i bank-key.pem -r . ec2-user@<public-ip>:bank-python`
 works too if the repo isn't on a remote.
 
 **You fill in:** your **repo URL** (or use `scp`).
@@ -538,8 +538,8 @@ Write `scripts/sync_to_snowflake.py` (copy new rows by `created_at`), then add a
 entry on the box:
 ```bash
 crontab -e
-# every 15 minutes, run the sync inside the app container:
-*/15 * * * * cd /home/ec2-user/bank-python && /usr/bin/docker compose run --rm app python scripts/sync_to_snowflake.py >> sync.log 2>&1
+# every 15 minutes, run the sync inside the app container (module form — see step 8 note):
+*/15 * * * * cd /home/ec2-user/bank-python && /usr/bin/docker compose run --rm app python -m scripts.sync_to_snowflake >> sync.log 2>&1
 ```
 **What:** a recurring job that copies new Postgres rows into Snowflake. On EC2 this is just
 the box's own `cron`, running the script inside a throwaway app container.
@@ -622,3 +622,102 @@ on port 8000 → Snowflake for analytics reads, synced by host `cron`.** No EKS,
 - **S3 (Phase 5):** backups / Snowpipe files — `boto3` is already in `requirements.txt`.
 - **Auto-start on reboot:** a small systemd unit running `docker compose up -d`.
 - **When you outgrow one box:** graduate to the EKS path in `docs/aws.md`.
+
+---
+
+# After first-time installation (day-to-day reference)
+
+Once the box exists and the stack is built, here's everything you need for normal use:
+logging in, finding the box's address, and running the app/UI/DB. Two parts —
+**(A) gather info** (the values the commands need) and **(B) the commands** themselves.
+
+## A. Gather info — values the commands need
+
+Run these from your **laptop** (where the AWS CLI is configured). They print the
+`<placeholders>` the commands in part B use. Region is `eu-north-1` throughout.
+
+| Need | Command | What it gives you |
+|------|---------|-------------------|
+| **Account/region OK?** | `aws sts get-caller-identity` | confirms your CLI is logged into the right AWS account |
+| **Instance id** | `aws ec2 describe-instances --region eu-north-1 --filters Name=tag:Name,Values=* --query 'Reservations[-1].Instances[-1].InstanceId' --output text` | the `i-...` id, used to start/stop/query the box |
+| **Is it running?** | `aws ec2 describe-instances --region eu-north-1 --instance-ids i-093255880fd4c5560 --query 'Reservations[].Instances[].State.Name' --output text` | `running` / `stopped` — a stopped box can't be reached |
+| **Public IP** | `aws ec2 describe-instances --region eu-north-1 --instance-ids i-093255880fd4c5560 --query 'Reservations[].Instances[].PublicIpAddress' --output text` | the `<public-ip>` for SSH and the browser URLs |
+| **Security-group id** | `aws ec2 describe-security-groups --region eu-north-1 --group-names bank-sg --query 'SecurityGroups[0].GroupId' --output text` | the `sg-0d2b71e64ebd9560c` to open/lock ports |
+| **Your current IP** | `curl -s https://checkip.amazonaws.com` | for re-adding the SSH rule if your network changed |
+
+> **Note — the public IP changes.** Each time you **stop and start** the instance, AWS gives
+> it a **new** public IP (unless you attach an Elastic IP). Re-run the "Public IP" command
+> after every start. (An Elastic IP keeps it fixed — see *Later / optional*.)
+
+## B. Commands — what you can do
+
+### Log in / control the box (run from your laptop)
+```bash
+ssh -i bank-key.pem ec2-user@<public-ip>          # SSH into the box
+aws ec2 start-instances  --region eu-north-1 --instance-ids i-093255880fd4c5560   # power on (IP changes!)
+aws ec2 stop-instances   --region eu-north-1 --instance-ids i-093255880fd4c5560   # power off (stops billing compute)
+aws ec2 reboot-instances --region eu-north-1 --instance-ids i-093255880fd4c5560   # reboot
+```
+- **Stop the box when you're done** for the day if you're past the free tier — a stopped
+  instance costs nothing for compute (you still pay a little for the EBS disk).
+
+### Open/inspect ports (run from your laptop)
+```bash
+# open a port (e.g. re-add SSH from a new network):
+aws ec2 authorize-security-group-ingress --group-id sg-0d2b71e64ebd9560c \
+  --protocol tcp --port 22 --cidr $(curl -s https://checkip.amazonaws.com)/32 --region eu-north-1
+# see what's open:
+aws ec2 describe-security-groups --region eu-north-1 --group-ids sg-0d2b71e64ebd9560c \
+  --query 'SecurityGroups[0].IpPermissions' --output table
+```
+
+### Run the app/UI/DB (run **on the box**, from `~/bank-python`)
+```bash
+cd ~/bank-python
+
+docker compose up -d                 # start everything (app + ui + postgres), detached
+docker compose up -d --build         # rebuild images first (use after a code change)
+docker compose ps                    # what's running + health
+docker compose down                  # stop & remove containers (data SURVIVES on the volume)
+docker compose restart               # restart all services
+docker compose restart app           # restart just one service (app | ui | postgres)
+```
+
+### Logs & shells (on the box)
+```bash
+docker compose logs -f app           # follow the API logs (Ctrl-C to stop)
+docker compose logs ui --tail 50     # last 50 lines of the UI
+docker compose logs postgres         # database logs
+docker compose exec app bash         # shell inside the running API container
+docker compose run --rm app printenv DATABASE_URL ANALYTICS_URL   # what env the app sees
+```
+
+### Data: seed, query, back up (on the box)
+```bash
+docker compose exec app python -m scripts.seed                    # (re)create tables + sample rows
+docker compose exec postgres psql -U bankuser -d bankdb           # open a SQL prompt
+docker compose exec postgres pg_dump -U bankuser bankdb > backup_$(date +%F).sql   # backup
+```
+
+### Update / redeploy after pushing new code (on the box)
+```bash
+cd ~/bank-python
+git pull                             # get the latest code
+docker compose up -d --build         # rebuild and roll the containers
+```
+
+### Snowflake sync (once step 16 is set up, on the box)
+```bash
+docker compose run --rm app python -m scripts.sync_to_snowflake   # run the sync now
+crontab -l                            # see the scheduled sync
+tail -f sync.log                      # watch sync output
+```
+
+### Open in a browser (from anywhere)
+```
+http://<public-ip>:8000/docs          # API — Swagger UI
+http://<public-ip>:8000/health        # API — health check
+http://<public-ip>:8501               # Streamlit chat UI
+```
+- Reachable only while the **box is running** and ports **8000/8501** are open in the
+  security group. If a URL hangs, check the instance state (part A) and the security group.
