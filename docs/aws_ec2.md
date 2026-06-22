@@ -309,8 +309,10 @@ network (5432 is never exposed publicly).
 
 **Cost:** free.
 
-### 6. Add an `app` service to `docker-compose.yml`
-Your current compose has only `postgres`. Add the FastAPI app alongside it:
+### 6. (Already done) The `app` service is in `docker-compose.yml`
+**Nothing to edit on the box** — the `app` service is already committed to the repo, so it
+arrives when you `git clone`/`git pull` in step 4. For reference, this is the block that's
+now in `docker-compose.yml` alongside `postgres`:
 ```yaml
   app:
     build: .                      # build the image from the Dockerfile, on the box
