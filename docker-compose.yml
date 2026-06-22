@@ -1,6 +1,6 @@
 # Local Postgres for development, mirroring the k8s deployment's credentials
 # (bankuser/bankpass/bankdb). Start with: docker-compose up -d
-version: "3"
+# (no top-level `version:` — it's obsolete in Compose v2 and only prints a warning)
 
 services:
   postgres:
@@ -27,10 +27,30 @@ services:
     container_name: bank-app
     env_file: .env
     ports:
-      - "8000:8000"               # box:container — this is the public-facing port
+      - "8000:8000"               # box:container — this is the public-facing API port
     depends_on:
       postgres:
         condition: service_healthy
+
+  # Streamlit chat UI. Same image, different command. Talks HTTP to the app container
+  # (API_URL=http://app:8000 — `app` is the Compose service name above).
+  ui:
+    build: .
+    container_name: bank-ui
+    env_file: .env
+    environment:
+      API_URL: http://app:8000
+    command:
+      - streamlit
+      - run
+      - ui/chat.py
+      - --server.port=8501
+      - --server.address=0.0.0.0
+      - --server.headless=true
+    ports:
+      - "8501:8501"               # the UI's public port
+    depends_on:
+      - app
 
 volumes:
   bank_pgdata:

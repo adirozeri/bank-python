@@ -213,20 +213,24 @@ After 12 months ~$7–9/month. Note: a public IPv4 now carries a tiny hourly cha
 the free tier.
 
 ### 2. Set the security group (firewall) `$`
-Allow inbound: **22 (SSH) from your IP only**, **8000 (the app) from `0.0.0.0/0`**.
+Allow inbound: **22 (SSH) from your IP only**, **8000 (the API) and 8501 (the UI) from
+`0.0.0.0/0`**.
 ```bash
 aws ec2 authorize-security-group-ingress --group-id <sg-id> \
   --protocol tcp --port 22 --cidr <your-ip>/32 --region eu-north-1
 aws ec2 authorize-security-group-ingress --group-id <sg-id> \
   --protocol tcp --port 8000 --cidr 0.0.0.0/0 --region eu-north-1
+aws ec2 authorize-security-group-ingress --group-id <sg-id> \
+  --protocol tcp --port 8501 --cidr 0.0.0.0/0 --region eu-north-1   # Streamlit UI
 ```
 **What:** a security group is the instance's firewall. By default it blocks everything; you
 open exactly the two ports you need.
 
 **Why:** SSH (22) is how you log in to set things up — lock it to your own IP so the box
 isn't exposed to the world. Port 8000 is where FastAPI/uvicorn listens (see the
-`Dockerfile`'s `EXPOSE 8000`), so the public must reach it for the URL to work. Postgres
-(5432) is **not** opened — only the app, inside the box, talks to it.
+`Dockerfile`'s `EXPOSE 8000`), and 8501 is the Streamlit UI — both must be reachable for
+their URLs to work. Postgres (5432) is **not** opened — only the app, inside the box, talks
+to it.
 
 **You fill in:** the **security-group id** and **your current IP** for the SSH rule.
 
@@ -250,7 +254,13 @@ sudo dnf install -y docker-compose-plugin || \
   ( mkdir -p ~/.docker/cli-plugins && \
     curl -SL "https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64" \
     -o ~/.docker/cli-plugins/docker-compose && chmod +x ~/.docker/cli-plugins/docker-compose )
-docker version && docker compose version   # verify both
+# buildx plugin — needed to BUILD images (Amazon Linux 2023 ships an old/none one;
+# `compose up --build` fails with "requires buildx 0.17.0 or later" without this):
+BUILDX_VER=v0.19.3
+mkdir -p ~/.docker/cli-plugins
+curl -sSL "https://github.com/docker/buildx/releases/download/${BUILDX_VER}/buildx-${BUILDX_VER}.linux-amd64" \
+  -o ~/.docker/cli-plugins/docker-buildx && chmod +x ~/.docker/cli-plugins/docker-buildx
+docker version && docker compose version && docker buildx version   # verify all three
 ```
 
 > **Permission denied on `/var/run/docker.sock`?** You added yourself to the `docker` group
@@ -292,15 +302,25 @@ In the project dir on the box, create `.env`:
 ```
 DATABASE_URL=postgresql://bankuser:bankpass@postgres:5432/bankdb
 ANTHROPIC_API_KEY=<your-key>
-# ANALYTICS_URL=...        # added in step 13 for Snowflake
+LLM_MODEL=claude-sonnet-4-6
+# ANALYTICS_URL=...        # leave OUT until step 13 (Snowflake)
 ```
 **What:** the file holding the app's settings/secrets, read at runtime (the app already does
 `os.getenv("DATABASE_URL")` in `app/database.py`, and `python-dotenv` is installed).
 
 **Why:** keeps secrets out of the image and out of git (`.env` is gitignored). The host
-`postgres` in the URL is the **Compose service name** from step 6 — Docker's internal DNS
-resolves it to the Postgres container, so the app reaches the DB over the box's internal
-network (5432 is never exposed publicly).
+`postgres` in the URL is the **Compose service name** — Docker's internal DNS resolves it to
+the Postgres container, so the app reaches the DB over the box's internal network (5432 is
+never exposed publicly).
+
+> ⚠️ **Two mistakes that crash the app on startup:**
+> - **`DATABASE_URL` host must be `postgres`, not `localhost`.** Inside the app *container*,
+>   `localhost` is the container itself — Postgres isn't there. Using `localhost` gives
+>   `connection to server at "localhost" … Connection refused`. (`localhost` is correct only
+>   when you run uvicorn directly on your laptop, not in Compose.)
+> - **Do NOT set `ANALYTICS_URL` yet.** Any non-empty value is treated as a real Snowflake
+>   URL; a placeholder like `...` or `snowflake://<user>:...` gives
+>   `Could not parse SQLAlchemy URL`. Leave it commented out until step 13.
 
 **You fill in:** your real `ANTHROPIC_API_KEY`. The DB credentials match the existing
 `docker-compose.yml` (`bankuser`/`bankpass`/`bankdb`).
@@ -353,22 +373,28 @@ docker compose ps        # both services Up; postgres healthy
 
 **You fill in:** nothing.
 
-**Creates (on the box):** a built **app image**, a running **`bank-app` container** and
-**`bank-postgres` container**, plus the **`bank_pgdata` volume** (already in your compose)
-that persists DB data across restarts.
+**Creates (on the box):** a built **app image**, running **`bank-app`** (API),
+**`bank-ui`** (Streamlit), and **`bank-postgres`** containers, plus the **`bank_pgdata`
+volume** (already in your compose) that persists DB data across restarts. All three come up
+from the one `docker compose up`.
 
 **Cost:** free — runs on the instance you already have.
 
 ### 8. Create tables / seed data
 ```bash
-docker compose exec app python scripts/seed.py     # if seed.py creates tables + sample rows
+docker compose exec app python -m scripts.seed     # creates tables + sample rows
 ```
 **What:** initializes the `transactions` table in the Postgres container (and optionally
 loads sample data).
 
-**Why:** a fresh Postgres container starts empty. The app's `create_all` (or `scripts/seed.py`)
-creates the schema so endpoints have a table to read/write. Because the data lives on the
-`bank_pgdata` volume, you only seed once — it survives restarts.
+**Why:** a fresh Postgres container starts empty. The seed script's `create_all` creates the
+schema so endpoints have a table to read/write. Because the data lives on the `bank_pgdata`
+volume, you only seed once — it survives restarts.
+
+> ⚠️ **Run it as a module (`-m scripts.seed`), not `python scripts/seed.py`.** Running the
+> script by path puts `/app/scripts` on the import path, so `from app.database import …`
+> fails with `ModuleNotFoundError: No module named 'app'`. `-m scripts.seed` runs from the
+> `/app` workdir, where the `app` package is importable.
 
 **You fill in:** nothing (uses the existing seed script).
 
@@ -381,9 +407,11 @@ volume.
 ```bash
 curl http://localhost:8000/health        # from inside the box
 # then from your laptop / browser:
-#   http://<public-ip>:8000/docs
+#   http://<public-ip>:8000/docs          ← API (Swagger)
+#   http://<public-ip>:8501               ← Streamlit chat UI
 ```
-**What:** confirm the app is up locally on the box, then reachable from the public internet.
+**What:** confirm the app is up locally on the box, then reachable from the public internet —
+both the API (`:8000`) and the UI (`:8501`).
 
 **Why:** two checks separate two failure modes — "app/DB broken" (localhost fails) vs.
 "firewall/networking wrong" (localhost works but the public IP doesn't, meaning the step-2
@@ -541,6 +569,24 @@ is the eventual consistency. Running the sync manually first removes the timing 
 **Creates:** nothing (a test row that the sync copies to Snowflake).
 
 **Cost:** a little warehouse compute on the sync/query (covered by step 11's `$$`).
+
+## Troubleshooting (gotchas seen during deploy)
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `permission denied … /var/run/docker.sock` | your shell predates the `docker` group add | `newgrp docker` (or log out/in); check `groups` |
+| `compose build requires buildx 0.17.0 or later` | Amazon Linux 2023 has an old/missing buildx | install the buildx CLI plugin (step 3) |
+| app `Exited (1)`, `Could not parse SQLAlchemy URL` | `ANALYTICS_URL` set to a placeholder too early | comment it out of `.env` until step 13 |
+| app `Exited (1)`, `connection to "localhost" … refused` | `DATABASE_URL` uses `localhost` | use host `postgres` (the Compose service name) |
+| `ModuleNotFoundError: No module named 'app'` on seed | ran the script by path | run `python -m scripts.seed` instead |
+| `the attribute version is obsolete` warning | leftover `version:` key in compose | harmless; removed in the committed file |
+
+Handy checks while debugging:
+```bash
+docker compose ps -a                       # see exited containers too
+docker compose logs app --tail 50          # why the app crashed
+docker compose run --rm app printenv DATABASE_URL ANALYTICS_URL   # what the app actually sees
+```
 
 ## End result — what you'll have
 
