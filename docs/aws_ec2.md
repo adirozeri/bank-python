@@ -447,18 +447,63 @@ the box).
 **Cost:** free.
 
 ### 11. Provision Snowflake `$$`
-Create a **database**, **schema**, **warehouse**, and a **read-only** role + user.
+Create a **database**, **schema**, **warehouse**, and a least-privilege role + user. Run
+this in a Snowflake worksheet as `ACCOUNTADMIN` (or a role allowed to create these). The
+names map 1:1 to the `ANALYTICS_URL` you'll build in step 13.
+```sql
+-- Run as ACCOUNTADMIN.
+USE ROLE ACCOUNTADMIN;
+
+-- 1. Compute. XSMALL + auto-suspend so it stops between queries (keeps credits ~0 when idle).
+CREATE WAREHOUSE IF NOT EXISTS BANK_WH
+  WAREHOUSE_SIZE = 'XSMALL'
+  AUTO_SUSPEND = 60          -- seconds idle before it powers down
+  AUTO_RESUME = TRUE
+  INITIALLY_SUSPENDED = TRUE;
+
+-- 2. Storage: the analytics database + schema.
+CREATE DATABASE IF NOT EXISTS BANK_DB;
+CREATE SCHEMA   IF NOT EXISTS BANK_DB.ANALYTICS;
+
+-- 3. A dedicated role for the app, scoped to ONLY this schema.
+CREATE ROLE IF NOT EXISTS BANK_APP_ROLE;
+GRANT USAGE              ON WAREHOUSE BANK_WH           TO ROLE BANK_APP_ROLE;
+GRANT USAGE              ON DATABASE  BANK_DB           TO ROLE BANK_APP_ROLE;
+GRANT USAGE, CREATE TABLE ON SCHEMA  BANK_DB.ANALYTICS TO ROLE BANK_APP_ROLE;
+-- (the sync creates the transactions table via this role, so it then owns + can read/write it)
+
+-- 4. A login for the app, defaulting to that role + warehouse.
+CREATE USER IF NOT EXISTS BANK_APP
+  PASSWORD = '<password>'                 -- pick a strong one; it goes into ANALYTICS_URL
+  DEFAULT_ROLE = BANK_APP_ROLE
+  DEFAULT_WAREHOUSE = BANK_WH
+  MUST_CHANGE_PASSWORD = FALSE;
+GRANT ROLE BANK_APP_ROLE TO USER BANK_APP;
+
+-- 5. Find your account identifier (the <account> part of ANALYTICS_URL):
+SELECT CURRENT_ORGANIZATION_NAME() || '-' || CURRENT_ACCOUNT_NAME() AS account_identifier;
+```
 **What:** the Snowflake side — storage (db/schema), compute (warehouse), and a least-
-privilege login for the app.
+privilege login the app uses for `/ask` reads **and** the cron sync's loads.
 
-**Why read-only:** Snowflake is an analytics copy, not the source of truth. A `SELECT`-only
-user means a bug or a bad `/ask` query can't corrupt it. Important for banking data.
+**Why scoped, not wide-open:** the role can only touch `BANK_DB.ANALYTICS` and nothing else
+in your account — it can't read other databases or run admin commands. That's the
+least-privilege point for banking data. (It *can* load its own analytics table, because the
+sync writes through this same connection — see the note below.)
 
-**You fill in (in Snowflake):** database, schema, warehouse name+size, and a read-only
-role/user with a password. Save them for step 13. **Set auto-suspend (~60 s)** on the
-warehouse to avoid idle charges.
+> **"Read-only" nuance.** Earlier steps call this a "read-only" user. Strictly, it needs
+> `CREATE TABLE` + load rights on its **own** `ANALYTICS` schema, because the cron sync
+> (step 16) writes the synced rows through this same `ANALYTICS_URL`. It is *read-only with
+> respect to the bank's real data*: all transactional writes still go to **Postgres**, and
+> this role can't write anywhere except its analytics copy. **Stricter alternative:** make a
+> separate `BANK_SYNC_ROLE`/user with write rights for the sync, and keep `BANK_APP_ROLE`
+> truly `SELECT`-only for `/ask` — then point the sync at a second URL. Overkill for a demo.
 
-**Creates (in Snowflake — not AWS):** a database, schema, warehouse, role, and user.
+**You fill in:** a strong `<password>`, and copy the resulting account identifier (from the
+last query). Object names above (`BANK_WH`/`BANK_DB`/`ANALYTICS`/`BANK_APP_ROLE`/`BANK_APP`)
+feed straight into step 13.
+
+**Creates (in Snowflake — not AWS):** a warehouse, database, schema, role, and user.
 
 **`$$` Cost:** Snowflake bills **credits** for warehouse compute per query (separate from
 AWS, not on any AWS free tier) plus storage. Auto-suspend keeps it near-zero when idle; new
@@ -479,8 +524,13 @@ sync runs).
 **Cost:** a tiny bit of warehouse compute to run the DDL (covered by step 11's `$$`).
 
 ### 13. Add `ANALYTICS_URL` to `.env`
+Generic form:
 ```
 ANALYTICS_URL=snowflake://<user>:<password>@<account>/<database>/<schema>?warehouse=<wh>&role=<role>
+```
+Filled in with the step-11 names (only `<password>` and `<account>` left to drop in):
+```
+ANALYTICS_URL=snowflake://BANK_APP:<password>@<account>/BANK_DB/ANALYTICS?warehouse=BANK_WH&role=BANK_APP_ROLE
 ```
 **What:** the Snowflake connection string, added to the same `.env` the app already reads.
 
