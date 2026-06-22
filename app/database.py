@@ -5,9 +5,28 @@ from sqlalchemy.orm import DeclarativeBase, sessionmaker, Mapped, mapped_column
 
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./bank.db")
 
-connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
-engine = create_engine(DATABASE_URL, connect_args=connect_args)
+# SQLite needs check_same_thread=False to be used across threads (FastAPI);
+# Postgres and other backends neither need nor accept that arg.
+is_sqlite = DATABASE_URL.startswith("sqlite")
+connect_args = {"check_same_thread": False} if is_sqlite else {}
+
+# pool_pre_ping validates connections before use, avoiding "server closed the
+# connection unexpectedly" errors when Postgres drops idle conns (common in k8s).
+engine = create_engine(DATABASE_URL, connect_args=connect_args, pool_pre_ping=True)
 SessionLocal = sessionmaker(bind=engine, autoflush=False)
+
+# --- Analytics engine (Snowflake reads) ---
+# The /ask read tools can run against a separate analytics warehouse (Snowflake) while all
+# writes stay on the primary engine (Postgres = source of truth). If ANALYTICS_URL is unset
+# (local dev / Phase 1), this transparently falls back to the primary engine, so the code
+# runs identically everywhere and only "splits" once a Snowflake URL is provided.
+ANALYTICS_URL = os.getenv("ANALYTICS_URL")
+if ANALYTICS_URL:
+    analytics_engine = create_engine(ANALYTICS_URL, pool_pre_ping=True)
+    AnalyticsSession = sessionmaker(bind=analytics_engine, autoflush=False)
+else:
+    analytics_engine = engine
+    AnalyticsSession = SessionLocal
 
 
 class Base(DeclarativeBase):

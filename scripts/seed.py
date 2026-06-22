@@ -1,7 +1,11 @@
 import random
 
-from database import Base, SessionLocal, engine
-from models import Transaction
+from dotenv import load_dotenv
+
+load_dotenv()  # must run before importing app.database (it reads DATABASE_URL at import)
+
+from app.database import Base, SessionLocal, engine
+from app.models import Transaction
 
 Base.metadata.create_all(bind=engine)
 

@@ -4,3 +4,9 @@ sqlalchemy
 pydantic
 pydantic-settings
 langgraph
+langchain-anthropic
+python-dotenv
+psycopg2-binary
+boto3
+streamlit
+requests

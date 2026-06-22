@@ -6,6 +6,8 @@ __pycache__/
 venv/
 .bank-venv/
 .env
+*.pem
+*.log
 
 # LangGraph dev server runtime cache
 .langgraph_api/

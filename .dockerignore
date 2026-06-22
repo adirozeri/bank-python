@@ -1,0 +1,33 @@
+# Python caches / bytecode
+__pycache__/
+*.py[cod]
+*.pyc
+
+# Virtualenvs
+.venv/
+venv/
+.bank-venv/
+
+# Secrets / local env
+.env
+.env.example
+
+# Local SQLite database (Postgres is used in-cluster)
+*.db
+bank.db
+
+# Version control & tooling
+.git/
+.gitignore
+.claude/
+.langgraph_api/
+
+# Docs / non-runtime assets not needed in the image
+docs/
+postman/
+README.md
+CLAUDE.md
+
+# Docker files themselves
+Dockerfile
+.dockerignore

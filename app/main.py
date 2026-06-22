@@ -28,10 +28,10 @@ class TransactionIn(BaseModel):
 
 
 class AskIn(BaseModel):
-    question: str | None = None
-    # Provided together on the follow-up call to confirm/reject the inferred intent.
+    question: str
+    # Pass the thread_id returned by a previous /ask to continue that conversation;
+    # omit it to start a new one.
     thread_id: str | None = None
-    confirm: bool | None = None
 
 
 # --- Endpoints ---
@@ -82,12 +82,5 @@ def get_transaction(txn_id: str, db: db_dependency):
 
 @app.post("/ask")
 def ask(data: AskIn):
-    if data.thread_id is not None and data.confirm is not None:
-        try:
-            return llm.resume(data.thread_id, data.confirm)
-        except llm.ResumeError as e:
-            raise HTTPException(404, str(e))
-    if not data.question:
-        raise HTTPException(422, "question is required")
-    return llm.ask(data.question)
+    return llm.ask(data.question, data.thread_id)
 

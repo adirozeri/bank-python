@@ -1,0 +1,31 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bank-python-deployment
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: bank-python
+  template:
+    metadata:
+      labels:
+        app: bank-python
+    spec:
+      containers:
+        - name: bank-python
+          image: bank-python:latest
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 8000
+          env:
+            - name: DATABASE_URL
+              value: "postgresql://bankuser:bankpass@postgres-service:5432/bankdb"
+            # Never hardcode the API key. Provide it via a Kubernetes Secret:
+            #   kubectl create secret generic bank-secrets \
+            #     --from-literal=anthropic-api-key=sk-ant-...
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: bank-secrets
+                  key: anthropic-api-key

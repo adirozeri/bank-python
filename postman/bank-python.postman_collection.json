@@ -29,7 +29,7 @@
       "request": { "method": "GET", "url": "http://localhost:8000/transactions/PASTE_ID_HERE" }
     },
     {
-      "name": "Ask (LLM) - Step 1: question",
+      "name": "Ask (LLM) - new conversation",
       "request": {
         "method": "POST",
         "header": [{ "key": "Content-Type", "value": "application/json" }],
@@ -41,19 +41,49 @@
       },
       "response": [
         {
-          "name": "needs_confirmation",
-          "body": "{\n  \"status\": \"needs_confirmation\",\n  \"thread_id\": \"<copy this into Step 2>\",\n  \"proposed_intent\": \"transactions\",\n  \"question\": \"show me the transactions for account ACC-0001\",\n  \"message\": \"Did you mean to ask about transactions?\"\n}"
+          "name": "answer",
+          "body": "{\n  \"thread_id\": \"<copy this into the follow-up to continue the chat>\",\n  \"answer\": \"Here are the latest transactions for ACC-0001 ...\",\n  \"queries\": [\n    {\n      \"tool\": \"list_transactions\",\n      \"sql\": \"SELECT ...\",\n      \"rows\": []\n    }\n  ]\n}"
         }
       ]
     },
     {
-      "name": "Ask (LLM) - Step 2: confirm intent",
+      "name": "Ask (LLM) - follow-up (same thread)",
       "request": {
         "method": "POST",
         "header": [{ "key": "Content-Type", "value": "application/json" }],
         "body": {
           "mode": "raw",
-          "raw": "{\n  \"thread_id\": \"PASTE_THREAD_ID_FROM_STEP_1\",\n  \"confirm\": true\n}"
+          "raw": "{\n  \"question\": \"what about its balance?\",\n  \"thread_id\": \"PASTE_THREAD_ID_FROM_PREVIOUS_RESPONSE\"\n}"
+        },
+        "url": "http://localhost:8000/ask"
+      }
+    },
+    {
+      "name": "Ask (LLM) - transfer Step 1: request",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"question\": \"I'm ACC-0001, transfer 100 USD to ACC-0002\"\n}"
+        },
+        "url": "http://localhost:8000/ask"
+      },
+      "response": [
+        {
+          "name": "awaiting confirmation",
+          "body": "{\n  \"thread_id\": \"<reuse this in Step 2>\",\n  \"answer\": \"Please confirm: transfer 100.0 USD from ACC-0001 to ACC-0002? (yes/no)\"\n}"
+        }
+      ]
+    },
+    {
+      "name": "Ask (LLM) - transfer Step 2: confirm with 'yes'",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"question\": \"yes\",\n  \"thread_id\": \"PASTE_THREAD_ID_FROM_STEP_1\"\n}"
         },
         "url": "http://localhost:8000/ask"
       }

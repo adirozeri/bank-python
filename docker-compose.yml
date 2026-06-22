@@ -1,0 +1,36 @@
+# Local Postgres for development, mirroring the k8s deployment's credentials
+# (bankuser/bankpass/bankdb). Start with: docker-compose up -d
+version: "3"
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: bank-postgres
+    environment:
+      POSTGRES_USER: bankuser
+      POSTGRES_PASSWORD: bankpass
+      POSTGRES_DB: bankdb
+    ports:
+      - "5432:5432"
+    volumes:
+      - bank_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bankuser -d bankdb"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # FastAPI app, built from the Dockerfile. On the EC2 box it reaches Postgres via
+  # the service name `postgres` (set DATABASE_URL=...@postgres:5432/... in .env).
+  app:
+    build: .
+    container_name: bank-app
+    env_file: .env
+    ports:
+      - "8000:8000"               # box:container — this is the public-facing port
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  bank_pgdata:

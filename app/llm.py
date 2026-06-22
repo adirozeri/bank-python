@@ -1,16 +1,36 @@
+"""Conversational banking assistant for /ask.
+
+A tool-calling agent with per-thread message history (the industry-standard chatbot
+shape): each turn the LLM either calls a read-only tool to fetch data or replies in
+natural language (including asking a clarifying question). There is no rigid yes/no
+confirmation step — the user can say anything and the model follows the conversation.
+
+Read-only queries run with no confirmation. The one *write* action — create_transfer
+— uses human-in-the-loop: it interrupt()s to ask the user to confirm before any row is
+written, which is exactly what interrupts are for.
+"""
+
+import json
 import os
-from typing import Literal, TypedDict
+from typing import Annotated, Literal, TypedDict
 from uuid import uuid4
 
 from langchain_anthropic import ChatAnthropic
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import (
+    AIMessage,
+    HumanMessage,
+    SystemMessage,
+    ToolMessage,
+)
+from langchain_core.tools import tool
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
+from langgraph.graph.message import add_messages
 from langgraph.types import Command, interrupt
 from pydantic import BaseModel, Field
 from sqlalchemy import case, func, select
 
-from .database import SessionLocal
+from .database import AnalyticsSession, SessionLocal
 from .models import Transaction
 
 llm = ChatAnthropic(
@@ -19,142 +39,43 @@ llm = ChatAnthropic(
     temperature=0,
 )
 
-# Holds paused graph state between the first /ask call and the confirmation call.
-# In-process only: thread_ids don't survive a server restart (fine for Phase 1).
+# Per-thread conversation memory. In-process only: history doesn't survive a server
+# restart (fine for Phase 1).
 checkpointer = MemorySaver()
 
-# Intents we know how to answer. Anything else -> "unknown".
-Intent = Literal["transactions", "balance", "unknown"]
+SYSTEM_PROMPT = (
+    "You are a helpful banking assistant for the bank-python app. You can answer "
+    "questions about transactions and account balances by calling the provided tools. "
+    "Only the tools can see the data, so never invent numbers — call a tool. "
+    "If a question is ambiguous (for example, which account), ask a brief clarifying "
+    "question instead of guessing. If asked about something other than transactions or "
+    "balances, briefly say what you can help with. Keep answers concise. "
+    "To move/transfer/send money, call create_transfer with from_account, to_account, "
+    "and amount (ask the user for any of these that are missing first). Do NOT ask the "
+    "user to confirm yourself — calling create_transfer triggers a confirmation step "
+    "automatically."
+)
 
 
-class Classification(BaseModel):
-    """Structured result of the intent-classification step."""
-
-    intent: Intent = Field(
-        description=(
-            "transactions: the user wants to see/list transaction records. "
-            "balance: the user wants an account balance. "
-            "unknown: anything else."
-        )
-    )
-    account_id: str | None = Field(
-        default=None,
-        description="The account id mentioned in the question, if any.",
-    )
+# --- Read-only data access (the SELECT-only guardrail is inherent: these only SELECT) ---
 
 
-classifier = llm.with_structured_output(Classification)
-
-
-class Judgment(BaseModel):
-    """LLM-as-judge verdict on the classifier's inferred intent."""
-
-    agrees: bool = Field(
-        description="True if the inferred intent matches what the user actually asked for."
-    )
-    reasoning: str = Field(description="One short sentence explaining the verdict.")
-
-
-judge_llm = llm.with_structured_output(Judgment)
-
-
-class State(TypedDict, total=False):
-    question: str
-    intent: Intent
-    account_id: str | None
-    judge_agrees: bool
-    judge_reasoning: str
-    confirmed: bool
-    sql: str
-    rows: list[dict]
-    answer: str
-
-
-# --- Intent classification (the only place the LLM makes a decision) ---
-
-
-def classify_intent(state: State) -> State:
-    prompt = (
-        "You route banking questions to a handler. Classify the question into exactly "
-        "one intent: 'transactions' (list/inspect transaction records), 'balance' "
-        "(how much money is in an account), or 'unknown' (neither). "
-        "If the question names a specific account id, extract it."
-    )
-    result: Classification = classifier.invoke(
-        [SystemMessage(content=prompt), HumanMessage(content=state["question"])]
-    )
-    state["intent"] = result.intent
-    state["account_id"] = result.account_id
-    return state
-
-
-# --- LLM-as-a-judge: does the inferred intent match what the user asked? ---
-
-
-def judge(state: State) -> State:
-    prompt = (
-        "You are a judge. Decide whether the inferred intent correctly captures what the "
-        "user actually asked. Intents: 'transactions' (list/inspect transaction records), "
-        "'balance' (how much money is in an account), 'unknown' (neither). "
-        f"Inferred intent: {state['intent']}."
-    )
-    result: Judgment = judge_llm.invoke(
-        [SystemMessage(content=prompt), HumanMessage(content=state["question"])]
-    )
-    state["judge_agrees"] = result.agrees
-    state["judge_reasoning"] = result.reasoning
-    return state
-
-
-def route_after_judge(state: State) -> str:
-    # Judge agrees -> ask the user to confirm; disagrees -> ask them to rephrase.
-    return "confirm" if state["judge_agrees"] else "clarify"
-
-
-# --- Human-in-the-loop confirmation (checkpoint / interrupt) ---
-
-
-def confirm(state: State) -> State:
-    decision = interrupt(
-        {
-            "proposed_intent": state["intent"],
-            "question": state["question"],
-            "message": f"Did you mean to ask about {state['intent']}?",
-        }
-    )
-    state["confirmed"] = bool(decision)
-    return state
-
-
-def route_after_confirm(state: State) -> str:
-    # Confirmed -> run the matching handler; rejected -> ask them to rephrase.
-    return state["intent"] if state["confirmed"] else "clarify"
-
-
-def clarify(state: State) -> State:
-    state["rows"] = []
-    state["answer"] = (
-        "I wasn't sure I understood your question. Could you rephrase it?"
-    )
-    return state
-
-
-def handle_transactions(state: State) -> State:
+def _query_transactions(account_id: str | None) -> tuple[str, list[dict]]:
     stmt = select(Transaction)
-    if state.get("account_id"):
-        stmt = stmt.where(Transaction.account_id == state["account_id"])
+    if account_id:
+        stmt = stmt.where(Transaction.account_id == account_id)
     stmt = stmt.order_by(Transaction.created_at.desc()).limit(20)
-
-    state["sql"] = str(stmt)
-    with SessionLocal() as session:
+    # Reads go to the analytics engine (Snowflake when configured, else the primary).
+    with AnalyticsSession() as session:
         txns = session.scalars(stmt).all()
-        state["rows"] = [
+        rows = [
             {col.name: getattr(t, col.name) for col in Transaction.__table__.columns}
             for t in txns
         ]
-    return state
+    return str(stmt), rows
 
-def handle_balance(state: State) -> State:
+
+def _query_balance(account_id: str | None) -> tuple[str, list[dict]]:
     # Balance = completed credits minus completed debits/transfers, per currency.
     balance = func.sum(
         case((Transaction.type == "credit", Transaction.amount), else_=-Transaction.amount)
@@ -163,115 +84,229 @@ def handle_balance(state: State) -> State:
         select(Transaction.account_id, Transaction.currency, balance)
         .where(Transaction.status == "completed")
     )
-    if state.get("account_id"):
-        stmt = stmt.where(Transaction.account_id == state["account_id"])
+    if account_id:
+        stmt = stmt.where(Transaction.account_id == account_id)
     stmt = stmt.group_by(Transaction.account_id, Transaction.currency).order_by(
         Transaction.account_id
     )
-
-    state["sql"] = str(stmt)
-    with SessionLocal() as session:
-        rows = session.execute(stmt).mappings().all()
-        state["rows"] = [dict(r) for r in rows]
-    return state
+    # Reads go to the analytics engine (Snowflake when configured, else the primary).
+    with AnalyticsSession() as session:
+        rows = [dict(r) for r in session.execute(stmt).mappings().all()]
+    return str(stmt), rows
 
 
-def handle_unknown(state: State) -> State:
-    state["rows"] = []
-    state["answer"] = (
-        "I can only answer questions about transactions or account balances. "
-        "Try asking to list transactions or for an account balance."
+# The @tool objects are bound to the LLM for their schema; the tools node below runs
+# the matching helper so it can also capture the SQL + rows for the API response.
+
+
+@tool
+def list_transactions(account_id: str | None = None) -> str:
+    """List recent transactions (up to 20, newest first).
+
+    Optionally filter to a single account by account_id, e.g. "ACC-0001".
+    """
+    _, rows = _query_transactions(account_id)
+    return json.dumps(rows, default=str)
+
+
+@tool
+def get_balance(account_id: str | None = None) -> str:
+    """Get account balance(s): completed credits minus completed debits/transfers,
+    grouped by account and currency. Optionally filter to a single account_id.
+    """
+    _, rows = _query_balance(account_id)
+    return json.dumps(rows, default=str)
+
+
+# --- Write action: transfer money (human-in-the-loop confirmation) ---
+
+
+class ConfirmDecision(BaseModel):
+    """How to read the user's reply to a transfer-confirmation prompt."""
+
+    decision: Literal["confirm", "cancel", "unclear"] = Field(
+        description=(
+            "confirm: the user clearly approves the transfer as described. "
+            "cancel: the user declines or wants to stop. "
+            "unclear: anything else, including approval that also changes the details "
+            "(e.g. 'yes but make it 50') or an unrelated message."
+        )
     )
-    return state
 
-def summarize(state: State) -> State:
-    context = f"Question: {state['question']}\nRows: {state['rows']}"
-    state["answer"] = llm.invoke(
+
+confirm_llm = llm.with_structured_output(ConfirmDecision)
+
+
+def _interpret_confirmation(reply: str) -> str:
+    """Let the LLM read a free-text reply; returns 'confirm' | 'cancel' | 'unclear'."""
+    verdict: ConfirmDecision = confirm_llm.invoke(
         [
-            SystemMessage(content="Answer the question from the rows, concisely."),
-            HumanMessage(content=context),
+            SystemMessage(
+                content=(
+                    "The user was asked to confirm a money transfer with the exact "
+                    "amount and accounts shown. Classify their reply. Only treat it as "
+                    "'confirm' if they approve it as-is; if they approve but change any "
+                    "detail, that is 'unclear', not 'confirm'."
+                )
+            ),
+            HumanMessage(content=reply),
         ]
-    ).content
-    return state
+    )
+    return verdict.decision
+
+
+def _account_exists(session, account_id: str) -> bool:
+    # No accounts table: an account "exists" if it appears in the transactions ledger.
+    return session.scalar(
+        select(Transaction.id).where(Transaction.account_id == account_id).limit(1)
+    ) is not None
+
+
+def _create_transfer(from_account: str, to_account: str, amount: float, currency: str = "USD") -> str:
+    # Pause and ask the user to confirm BEFORE writing anything. interrupt() suspends the
+    # graph; ask() resumes it with the user's next message, which arrives here as `decision`.
+    reply = interrupt(
+        {
+            "action": "create_transfer",
+            "message": (
+                f"Please confirm: transfer {amount} {currency} from {from_account} "
+                f"to {to_account}? (yes/no)"
+            ),
+        }
+    )
+    decision = _interpret_confirmation(str(reply))
+    if decision == "cancel":
+        return "Transfer cancelled — no transaction was created."
+    if decision == "unclear":
+        return (
+            "I didn't take that as a clear yes. No transfer was made. If you still want "
+            "it, say so (and restate the amount/accounts if you'd like to change them)."
+        )
+
+    with SessionLocal() as session:
+        missing = [a for a in (from_account, to_account) if not _account_exists(session, a)]
+        if missing:
+            return f"Account(s) not found: {', '.join(missing)}. No transfer created."
+
+        # Double-entry: debit the sender (a 'transfer' out), credit the receiver.
+        debit = Transaction(
+            account_id=from_account, amount=amount, currency=currency, type="transfer",
+            status="completed", counterparty=to_account,
+            description=f"Transfer to {to_account}",
+        )
+        credit = Transaction(
+            account_id=to_account, amount=amount, currency=currency, type="credit",
+            status="completed", counterparty=from_account,
+            description=f"Transfer from {from_account}",
+        )
+        session.add_all([debit, credit])
+        session.commit()
+        return (
+            f"Transfer completed: {amount} {currency} from {from_account} to "
+            f"{to_account} (transaction id {debit.id})."
+        )
+
+
+@tool
+def create_transfer(from_account: str, to_account: str, amount: float, currency: str = "USD") -> str:
+    """Transfer money from one account to another. Use this whenever the user asks to
+    move, send, or transfer money. The user will be asked to confirm before it is created.
+    """
+    return _create_transfer(from_account, to_account, amount, currency)
+
+
+TOOLS = [list_transactions, get_balance, create_transfer]
+HELPERS = {"list_transactions": _query_transactions, "get_balance": _query_balance}
+WRITE_TOOLS = {"create_transfer": _create_transfer}  # run in-node; may interrupt()
+llm_with_tools = llm.bind_tools(TOOLS)
+
+
+# --- Agent graph: agent <-> tools loop ---
+
+
+class State(TypedDict):
+    messages: Annotated[list, add_messages]
+    # SQL + rows from the tool calls of the most recent tools step (overwritten each
+    # time tools run); surfaced in the API response per the "/ask returns SQL+rows" rule.
+    queries: list[dict]
+
+
+def agent(state: State) -> dict:
+    response = llm_with_tools.invoke([SystemMessage(content=SYSTEM_PROMPT), *state["messages"]])
+    return {"messages": [response]}
+
+
+def run_tools(state: State) -> dict:
+    last = state["messages"][-1]
+    tool_messages = []
+    queries = []
+    for call in last.tool_calls:
+        name = call["name"]
+        if name in WRITE_TOOLS:
+            # Write tool (e.g. create_transfer): runs here and may interrupt() to confirm.
+            content = WRITE_TOOLS[name](**call["args"])
+        else:
+            sql, rows = HELPERS[name](call["args"].get("account_id"))
+            queries.append({"tool": name, "sql": sql, "rows": rows})
+            content = json.dumps(rows, default=str)
+        tool_messages.append(ToolMessage(content=content, tool_call_id=call["id"]))
+    return {"messages": tool_messages, "queries": queries}
+
+
+def should_continue(state: State) -> str:
+    return "tools" if getattr(state["messages"][-1], "tool_calls", None) else END
 
 
 graph = StateGraph(State)
-graph.add_node("classify_intent", classify_intent)
-graph.add_node("judge", judge)
-graph.add_node("confirm", confirm)
-graph.add_node("clarify", clarify)
-graph.add_node("handle_transactions", handle_transactions)
-graph.add_node("handle_balance", handle_balance)
-graph.add_node("handle_unknown", handle_unknown)
-graph.add_node("summarize", summarize)
+graph.add_node("agent", agent)
+graph.add_node("tools", run_tools)
+graph.add_edge(START, "agent")
+graph.add_conditional_edges("agent", 
+                            should_continue, 
+                            {
+                                "tools": "tools",
+                                END: END
+                            }
+                            )
+graph.add_edge("tools", "agent")
 
-graph.add_edge(START, "classify_intent")
-graph.add_edge("classify_intent", "judge")
-graph.add_conditional_edges(
-    "judge",
-    route_after_judge,
-    {"confirm": "confirm", "clarify": "clarify"},
-)
-graph.add_conditional_edges(
-    "confirm",
-    route_after_confirm,
-    {
-        "transactions": "handle_transactions",
-        "balance": "handle_balance",
-        "unknown": "handle_unknown",
-        "clarify": "clarify",
-    },
-)
-graph.add_edge("handle_transactions", "summarize")
-graph.add_edge("handle_balance", "summarize")
-graph.add_edge("handle_unknown", END)
-graph.add_edge("clarify", END)
-graph.add_edge("summarize", END)
-
-# Checkpointer is required for interrupt()/Command(resume=...) to work.
 app_graph = graph.compile(checkpointer=checkpointer)
 
 
-class ResumeError(Exception):
-    """A thread_id can't be resumed: unknown/expired, or not awaiting confirmation."""
+def _answer_text(message: AIMessage) -> str:
+    """Anthropic content can be a string or a list of blocks; return plain text."""
+    content = message.content
+    if isinstance(content, str):
+        return content
+    return "".join(b.get("text", "") for b in content if isinstance(b, dict))
 
 
-def _shape(result: dict, thread_id: str) -> dict:
-    """Turn raw graph output into the API response (pending confirmation vs. done)."""
-    interrupts = result.get("__interrupt__")
-    if interrupts:
-        return {"status": "needs_confirmation", "thread_id": thread_id, **interrupts[0].value}
-    return {
-        "status": "done",
-        "answer": result.get("answer"),
-        "intent": result.get("intent"),
-        "sql": result.get("sql"),
-        "rows": result.get("rows"),
-    }
+def ask(question: str, thread_id: str | None = None) -> dict:
+    """Send one user turn. Pass the returned thread_id back to continue the conversation.
 
-
-def ask(question: str) -> dict:
-    """Start a new question; pauses at the confirmation step and returns a thread_id."""
-    thread_id = str(uuid4())
-    config = {"configurable": {"thread_id": thread_id}}
-    return _shape(app_graph.invoke({"question": question}, config=config), thread_id)
-
-
-def resume(thread_id: str, confirm: bool) -> dict:
-    """Resume a paused question with the user's confirmation decision.
-
-    Raises ResumeError if the thread is unknown/expired (no saved state) or is not
-    currently waiting on a confirmation (e.g. already completed). Without this guard,
-    resuming an unknown thread restarts the graph with no question and crashes.
+    Returns the natural-language answer plus, when tools were used this turn, the
+    underlying SQL + rows (one entry per tool call).
     """
+    thread_id = thread_id or str(uuid4())
     config = {"configurable": {"thread_id": thread_id}}
+
     snapshot = app_graph.get_state(config)
-    if snapshot.created_at is None:
-        raise ResumeError(
-            f"Unknown or expired thread_id '{thread_id}'. Start a new question via /ask."
-        )
-    if not snapshot.next:
-        raise ResumeError(
-            f"Thread '{thread_id}' is not awaiting confirmation (already completed)."
-        )
-    return _shape(app_graph.invoke(Command(resume=confirm), config=config), thread_id)
+    prev_count = len(snapshot.values.get("messages", [])) if snapshot.values else 0
+
+    if snapshot.next:
+        # The graph is paused at a confirmation interrupt; treat this message as the reply.
+        result = app_graph.invoke(Command(resume=question), config=config)
+    else:
+        result = app_graph.invoke({"messages": [HumanMessage(content=question)]}, config=config)
+
+    # A pending interrupt means we're now awaiting confirmation: surface its prompt.
+    if result.get("__interrupt__"):
+        return {"thread_id": thread_id, "answer": result["__interrupt__"][0].value["message"]}
+
+    new_messages = result["messages"][prev_count:]
+    used_tools = any(isinstance(m, ToolMessage) for m in new_messages)
+
+    payload = {"thread_id": thread_id, "answer": _answer_text(result["messages"][-1])}
+    if used_tools:
+        payload["queries"] = result.get("queries", [])
+    return payload
