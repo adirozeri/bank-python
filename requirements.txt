@@ -4,10 +4,14 @@ sqlalchemy
 pydantic
 pydantic-settings
 langgraph
+langchain-google-genai
+langchain-groq
 langchain-anthropic
+pyyaml
 python-dotenv
 psycopg2-binary
 boto3
 streamlit
 requests
 snowflake-sqlalchemy
+langgraph-cli[inmem]

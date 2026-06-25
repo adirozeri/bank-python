@@ -21,6 +21,16 @@ venv/
 allure-results/
 allure-report/
 
+# pytest-html per-run reports
+tests/reports/
+
+# LangSmith trace exports / run dumps (may contain sensitive data)
+langsmith/exports/
+runs/
+
+# Local SQLite database
+*.db
+
 # OS / editor
 .DS_Store
 .idea/

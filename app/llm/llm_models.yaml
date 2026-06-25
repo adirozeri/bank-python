@@ -1,0 +1,51 @@
+# LLM routing for the agentic /ask workflow, in two layers:
+#   1) `llms`  — a CATALOG of named model definitions using NORMALIZED, provider-agnostic
+#                keys (provider, model, temperature, max_tokens, thoughts, thoughts_budget).
+#                The per-provider builders in app/llm/factory.py translate these into each
+#                SDK's actual kwargs (e.g. thoughts -> Gemini include_thoughts / Claude
+#                thinking{} / Groq reasoning_format).
+#   2) `roles` — maps each workflow role to ONE catalog entry by name.
+# Loaded at runtime by app/llm/factory.py.
+
+llms:
+  # Fast Gemini (default workhorse).
+  llm1:
+    provider: google
+    model: gemini-2.5-flash
+    temperature: 0
+    thoughts: true
+
+  # Strong Gemini.
+  llm2:
+    provider: google
+    model: gemini-2.5-pro
+    temperature: 0
+    thoughts: true
+
+  # Groq. NOTE: `thoughts` only takes effect on reasoning-capable Groq models; llama-3.3 is
+  # a plain chat model, so swap to a reasoning model (e.g. gpt-oss / qwen3) to see reasoning.
+  llm3:
+    provider: groq
+    model: llama-3.3-70b-versatile
+    temperature: 0.2
+    max_tokens: 1024
+    thoughts: true
+
+  # Anthropic Claude. With thoughts on, the builder enables thinking and forces temperature=1.
+  llm4:
+    provider: anthropic
+    model: claude-sonnet-4-6
+    temperature: 0
+    thoughts: true
+
+# Which catalog LLM each role uses. Change the value (e.g. judge: llm4) to repoint a role.
+roles:
+  user_intent: llm4     # Call 1 — drives conversation + tool selection
+  risk_analysis: llm4   # Call 2 — scores transfer risk (different vendor than the judge)
+  judge: llm4           # Call 3 — reviews the risk analysis
+
+# Persona key -> prompt file under prompts/persona/<name>.md. Controls user-facing tone.
+personas:
+  default: formal
+  young: casual
+  senior: formal

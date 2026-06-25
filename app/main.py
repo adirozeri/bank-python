@@ -1,5 +1,12 @@
 from typing import Annotated
 
+from dotenv import load_dotenv
+
+# Load .env before importing anything that reads env vars (LangSmith tracing,
+# provider keys). Done here so EVERY entrypoint — uvicorn, Docker, run.py — picks it up;
+# previously only run.py called load_dotenv(), so tracing was silently off in containers.
+load_dotenv()
+
 from fastapi import Depends, FastAPI, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -76,11 +83,11 @@ def list_transactions(
 def get_transaction(txn_id: str, db: db_dependency):
     txn = db.get(Transaction, txn_id)
     if not txn:
-        raise HTTPException(404, "Transaction not found")
+        raise HTTPException(status_code=404, detail="Transaction not found")
     return txn
 
 
 @app.post("/ask")
 def ask(data: AskIn):
-    return llm.ask(data.question, data.thread_id)
+    return llm.ask(question=data.question, thread_id=data.thread_id)
 
