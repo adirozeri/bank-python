@@ -6,12 +6,16 @@ llm.py) so the graph nodes stay free of ORM details. Reads go to the analytics e
 """
 
 import json
+from collections import Counter
 
 from langsmith import traceable
 from sqlalchemy import case, func, select
 
 from ..database import AnalyticsSession, SessionLocal
 from ..models import Transaction
+
+# Transaction types that move money OUT of the sender's account.
+_OUTFLOW_TYPES = ("debit", "transfer")
 
 
 @traceable(run_type="tool")
@@ -96,6 +100,52 @@ def execute_transfer(
             f"Transfer completed: {amount} {currency} from {from_account} to "
             f"{to_account} (transaction id {debit.id})."
         )
+
+
+@traceable(run_type="tool")
+def risk_features(transfer: dict) -> dict:
+    """Precompute the deterministic risk signals so the LLM does judgement, not arithmetic.
+
+    Pulls the sender's balances + recent history and reduces them to a small, factual
+    summary (overdraft checks, per-currency balances, pending-outflow totals, counts) —
+    far fewer tokens than the raw rows, and the math is correct by construction.
+    """
+    account_id = transfer["from_account"]
+    currency = transfer["currency"]
+    amount = float(transfer["amount"])
+
+    _, balances = query_balance(account_id=account_id)
+    _, history = query_transactions(account_id=account_id)
+
+    by_currency = {b["currency"]: round(b["balance"], 2) for b in balances}
+    available = by_currency.get(currency, 0.0)
+
+    pending_outflows = round(
+        sum(
+            h["amount"]
+            for h in history
+            if h["currency"] == currency
+            and h["status"] == "pending"
+            and h["type"] in _OUTFLOW_TYPES
+        ),
+        2,
+    )
+    outflows = [h["amount"] for h in history if h["type"] in _OUTFLOW_TYPES]
+
+    return {
+        "transfer": {k: transfer[k] for k in ("from_account", "to_account", "amount", "currency")},
+        "available_balance": available,
+        "balances_by_currency": by_currency,
+        "negative_currencies": [c for c, v in by_currency.items() if v < 0],
+        "amount_pct_of_balance": round(100 * amount / available, 1) if available > 0 else None,
+        "pending_outflows_same_currency": pending_outflows,
+        "projected_balance_after_pending": round(available - pending_outflows, 2),
+        "would_overdraft_now": amount > available,
+        "would_overdraft_after_pending": (available - pending_outflows - amount) < 0,
+        "status_counts": dict(Counter(h["status"] for h in history)),
+        "largest_recent_outflow": round(max(outflows), 2) if outflows else 0.0,
+        "history_size": len(history),
+    }
 
 
 def transactions_json(account_id: str | None) -> str:

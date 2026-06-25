@@ -11,7 +11,7 @@ from typing import cast
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from .. import data_access
-from ..factory import get_llm
+from ..factory import get_llm, trace_config
 from ..prompts import load_prompt
 from ..schemas import RiskAssessment
 from ..state import State, require
@@ -28,7 +28,7 @@ def _run_risk(payload: dict) -> RiskAssessment:
                 SystemMessage(content=system),
                 HumanMessage(content=json.dumps(payload, default=str)),
             ],
-            config={"run_name": "RiskAnalysis", "tags": ["role:risk_analysis", "provider:groq"]},
+            config=trace_config("risk_analysis", "RiskAnalysis"),
         ),
     )
 
@@ -36,8 +36,7 @@ def _run_risk(payload: dict) -> RiskAssessment:
 def risk_analysis(state: State) -> dict:
     """Assess the pending transfer's risk and store it as state['risk']."""
     transfer = require(state.get("transfer"), name="transfer")
-    _, balance = data_access.query_balance(account_id=transfer["from_account"])
-    _, history = data_access.query_transactions(account_id=transfer["from_account"])
-    payload = {"transfer": transfer, "balance": balance, "history": history}
+    # Precomputed signals (overdraft checks, balances, counts) instead of raw rows.
+    payload = data_access.risk_features(transfer=transfer)
     assessment = _run_risk(payload=payload)
     return {"risk": assessment.model_dump()}

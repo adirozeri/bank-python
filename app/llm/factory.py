@@ -16,8 +16,18 @@ Supported providers: google (Gemini), groq (Llama/reasoning models), anthropic (
 from functools import lru_cache
 
 from langchain_core.language_models import BaseChatModel
+from langchain_core.runnables import RunnableConfig
 
-from .config import llm_spec_for, settings
+from .config import llm_spec_for, provider_for, settings
+
+
+def trace_config(role: str, run_name: str) -> RunnableConfig:
+    """Build the LangSmith run config for a node call.
+
+    Tags are derived from the live config (`provider_for(role)`) — never hardcoded — so they
+    always reflect the model a role actually uses, even after the YAML is repointed.
+    """
+    return {"run_name": run_name, "tags": [f"role:{role}", f"provider:{provider_for(role)}"]}
 
 # Default token budget for "thinking" when a spec enables thoughts without its own budget.
 _DEFAULT_THOUGHTS_BUDGET = 1024

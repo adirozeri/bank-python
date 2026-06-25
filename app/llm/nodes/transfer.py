@@ -12,7 +12,7 @@ from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 from langgraph.types import interrupt
 
 from .. import data_access
-from ..factory import get_llm
+from ..factory import get_llm, trace_config
 from ..schemas import ConfirmDecision
 from ..state import State, require
 
@@ -30,7 +30,7 @@ def interpret_confirmation(reply: str) -> str:
         ConfirmDecision,
         model.invoke(
             [SystemMessage(content=_CONFIRM_SYSTEM), HumanMessage(content=reply)],
-            config={"run_name": "ConfirmParse", "tags": ["role:user_intent", "provider:google"]},
+            config=trace_config("user_intent", "ConfirmParse"),
         ),
     )
     return verdict.decision

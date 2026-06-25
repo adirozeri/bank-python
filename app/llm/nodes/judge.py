@@ -11,7 +11,7 @@ from typing import cast
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from .. import data_access
-from ..factory import get_llm
+from ..factory import get_llm, trace_config
 from ..prompts import load_prompt
 from ..schemas import JudgeVerdict
 from ..state import State, require
@@ -28,7 +28,7 @@ def _run_judge(payload: dict) -> JudgeVerdict:
                 SystemMessage(content=system),
                 HumanMessage(content=json.dumps(payload, default=str)),
             ],
-            config={"run_name": "Judge", "tags": ["role:judge", "provider:google"]},
+            config=trace_config("judge", "Judge"),
         ),
     )
 
@@ -37,13 +37,8 @@ def judge(state: State) -> dict:
     """Evaluate the risk assessment and store the verdict as state['judge']."""
     transfer = require(state.get("transfer"), name="transfer")
     risk = require(state.get("risk"), name="risk")
-    _, balance = data_access.query_balance(account_id=transfer["from_account"])
-    _, history = data_access.query_transactions(account_id=transfer["from_account"])
-    payload = {
-        "transfer": transfer,
-        "balance": balance,
-        "history": history,
-        "risk_assessment": risk,
-    }
+    # Same precomputed features the risk model saw, plus its verdict to evaluate.
+    payload = data_access.risk_features(transfer=transfer)
+    payload["risk_assessment"] = risk
     verdict = _run_judge(payload=payload)
     return {"judge": verdict.model_dump()}

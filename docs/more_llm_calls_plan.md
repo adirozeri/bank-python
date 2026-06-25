@@ -11,10 +11,10 @@ the code into small, single-responsibility modules.
 
 | Topic | Decision |
 |-------|----------|
-| Providers | **Gemini** (Google) for *User Intent* + *Judge*; **Groq** for *Risk Analysis*. **No Anthropic** anywhere. |
-| Abstraction | **LangChain provider wrappers** (`langchain-google-genai`, `langchain-groq`). Not LiteLLM. |
+| Providers | Config-driven **catalog** of named LLMs (`google`/`groq`/`anthropic`); each role maps to a catalog entry and is swappable with no code change. |
+| Abstraction | **LangChain provider wrappers** via a per-provider builder layer (`factory.py`) that translates normalized keys (e.g. `thoughts`) to each SDK. Not LiteLLM. |
 | Transfer approval | Risk + Judge gate, **then always** the existing human `interrupt()` yes/no. **Never auto-execute.** |
-| Deterministic risk | None exists today → gate is **purely LLM-driven** for now (can add a rule later). |
+| Deterministic risk | `data_access.risk_features(transfer)` computes the signals (overdraft checks, balances, counts) **in code**; the LLMs judge those features rather than re-deriving them. |
 | Tracing | **LangSmith only** (already stubbed in `.env.example`). No Langfuse. |
 | MCP | **Out of scope** for now (later investigation). |
 | Phase | Intended **now**. |
@@ -195,19 +195,34 @@ persona) as run metadata/tags so each `/ask` shows which models ran. **No Langfu
 
 ---
 
-## 5. Risk + Judge data flow (reuse existing helpers)
+## 5. Risk + Judge data flow (deterministic features, computed in code)
 
-1. On a transfer request, gather inputs via `data_access.query_balance(from_account)` and
-   `data_access.query_transactions(from_account)` (the moved `_query_*` helpers) — no new
-   DB code.
-2. `risk.py`: `get_llm("risk_analysis").with_structured_output(RiskAssessment)` over
-   {balance, history, requested transfer} → `RiskAssessment`.
-3. `judge.py`: `get_llm("judge").with_structured_output(JudgeVerdict)` over {same data +
-   the RiskAssessment JSON} → `JudgeVerdict` (**different model** from risk).
+To cut tokens and make the math reliable, the agent computes the risk signals **in code** and
+passes the LLMs a compact feature summary instead of the raw rows — the model does
+*judgement*, not arithmetic (LLMs are unreliable at the arithmetic and were missing overdrafts).
+
+1. `data_access.risk_features(transfer)` pulls balances + recent history (via the existing
+   `query_balance` / `query_transactions`) and reduces them to a small dict:
+   `available_balance`, `balances_by_currency`, `negative_currencies`, `amount_pct_of_balance`,
+   `pending_outflows_same_currency`, `projected_balance_after_pending`,
+   `would_overdraft_now` / `would_overdraft_after_pending`, `status_counts`,
+   `largest_recent_outflow`, `history_size`. (`@traceable`, so the features show in LangSmith.)
+2. `risk.py`: `get_llm("risk_analysis").with_structured_output(RiskAssessment)` over the
+   features → `RiskAssessment`.
+3. `judge.py`: `get_llm("judge").with_structured_output(JudgeVerdict)` over the **same**
+   features + the RiskAssessment → `JudgeVerdict` (**different model** from risk).
 4. `decision.py`: proceed **iff** `risk_level != HIGH` **and** `approval == "ACCEPTED"`;
    else return a denial carrying both reasons.
 5. `transfer.py`: on proceed, run the existing `interrupt()` confirmation, then the
    double-entry write.
+
+The per-LLM prompt files describe these features ("the arithmetic is already done; do not
+recompute") and cap `reason` to one short sentence to keep output tokens low.
+
+> **Known limitation:** Anthropic's *thinking* is incompatible with structured output via
+> forced tool calls, so on Claude the structured call can intermittently raise (best-effort
+> via langchain's fallback). Gemini's structured output coexists with thinking. Current
+> decision: **leave as-is**; prefer Gemini for roles where visible reasoning matters.
 
 ---
 

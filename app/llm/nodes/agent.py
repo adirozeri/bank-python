@@ -7,7 +7,7 @@ combined with the configured persona so user-facing text matches the desired ton
 
 from langchain_core.messages import SystemMessage, AIMessage
 
-from ..factory import get_llm
+from ..factory import get_llm, trace_config
 from ..prompts import load_persona, load_prompt
 from ..state import State
 from ..tools import TOOLS
@@ -19,6 +19,6 @@ def agent(state: State) -> dict:
     system = f"{load_prompt(role='user_intent')}\n\n{load_persona()}"
     response = model.invoke(
         [SystemMessage(content=system), *state["messages"]],
-        config={"run_name": "UserIntent", "tags": ["role:user_intent", "provider:google"]},
+        config=trace_config("user_intent", "UserIntent"),
     )
     return {"messages": [response]}

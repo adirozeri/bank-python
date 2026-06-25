@@ -89,6 +89,34 @@ class TestDataAccess:
             assert s.query(Transaction).filter_by(type="transfer").count() == 0
 
 
+# --- risk features (deterministic, computed in code) ----------------------------------
+
+
+@allure.epic("Unit tests")
+@allure.feature("LLM SDK")
+@allure.story("Risk features")
+class TestRiskFeatures:
+    @staticmethod
+    def _transfer(amount):
+        return {"from_account": "ACC-0001", "to_account": "ACC-0002",
+                "amount": amount, "currency": "USD", "tool_call_id": "t"}
+
+    @allure.title("Computes balance, counts, and outflow signals from the ledger")
+    def test_basic_signals(self, seeded):
+        f = data_access.risk_features(transfer=self._transfer(50))
+        assert f["available_balance"] == 70.0          # 100 credit - 30 debit (completed)
+        assert f["would_overdraft_now"] is False        # 50 <= 70
+        assert f["pending_outflows_same_currency"] == 0.0  # the pending row is a credit
+        assert f["largest_recent_outflow"] == 30.0
+        assert f["status_counts"] == {"completed": 2, "pending": 1}
+        assert f["amount_pct_of_balance"] == 71.4
+
+    @allure.title("Flags an overdraft when the amount exceeds the balance")
+    def test_overdraft_flag(self, seeded):
+        f = data_access.risk_features(transfer=self._transfer(100))
+        assert f["would_overdraft_now"] is True
+
+
 # --- factory & config -----------------------------------------------------------------
 
 
