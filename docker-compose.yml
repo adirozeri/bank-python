@@ -20,26 +20,52 @@ services:
       timeout: 5s
       retries: 5
 
+  # MCP server — a SEPARATE process/container that owns the LLM config + prompt files and
+  # serves them over Streamable HTTP. The app (MCP client) reaches it at http://mcp:8000/mcp.
+  mcp:
+    build:
+      context: .
+      dockerfile: mcp_server/Dockerfile
+    container_name: bank-mcp
+    env_file: .env
+    ports:
+      - "8000:8000"               # MCP server's public port
+    healthcheck:                  # gate the app's startup on the server accepting connections
+      test: ["CMD-SHELL", "python -c \"import socket; socket.create_connection(('localhost', 8000), 2).close()\""]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
   # FastAPI app, built from the Dockerfile. On the EC2 box it reaches Postgres via
-  # the service name `postgres` (set DATABASE_URL=...@postgres:5432/... in .env).
+  # the service name `postgres` (set DATABASE_URL=...@postgres:5432/... in .env). Runs on 5002
+  # (the MCP server holds 8000); fetches config/prompts from the `mcp` service over the network.
   app:
     build: .
     container_name: bank-app
     env_file: .env
+    environment:
+      MCP_SERVER_URL: http://mcp:8000/mcp   # reach the MCP server by Compose service name
+    command:
+      - uvicorn
+      - app.main:app
+      - --host=0.0.0.0
+      - --port=5002
     ports:
-      - "8000:8000"               # box:container — this is the public-facing API port
+      - "5002:5002"               # box:container — this is the public-facing API port
     depends_on:
       postgres:
         condition: service_healthy
+      mcp:
+        condition: service_healthy
 
   # Streamlit chat UI. Same image, different command. Talks HTTP to the app container
-  # (API_URL=http://app:8000 — `app` is the Compose service name above).
+  # (API_URL=http://app:5002 — `app` is the Compose service name above).
   ui:
     build: .
     container_name: bank-ui
     env_file: .env
     environment:
-      API_URL: http://app:8000
+      API_URL: http://app:5002
     command:
       - streamlit
       - run
