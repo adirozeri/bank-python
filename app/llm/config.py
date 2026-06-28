@@ -1,20 +1,16 @@
 """LLM settings and routing config.
 
-Centralizes the LLM SDK's secrets and file locations (previously scattered ``os.getenv``
-calls), plus loading of the declarative routing file ``config/llm_models.yaml``. Lives in
-the llm package because every value here is LLM-specific; import the module-level
-``settings`` singleton and the ``load_llm_config`` helper where needed.
+Centralizes the LLM SDK's secrets (provider API keys) and the persona default. The routing
+config itself is no longer a local file — it is owned by the MCP server and fetched over the
+network via ``mcp_client``; ``load_llm_config`` is now a thin, cached pass-through so existing
+callers (``llm_spec_for`` / ``provider_for`` / the prompt layer) are unchanged.
 """
 
 from functools import lru_cache
-from pathlib import Path
 
-import yaml
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# The llm package directory (app/llm). Prompts and the routing YAML live alongside the
-# code so the package is self-contained.
-PACKAGE_DIR = Path(__file__).resolve().parent
+from . import mcp_client
 
 
 class Settings(BaseSettings):
@@ -28,11 +24,11 @@ class Settings(BaseSettings):
     groq_api_key: str | None = None
     anthropic_api_key: str | None = None
 
-    # Locations of the LLM routing file and the prompt templates (inside the package).
-    llm_models_path: Path = PACKAGE_DIR / "llm_models.yaml"
-    prompts_dir: Path = PACKAGE_DIR / "prompts"
+    # MCP server endpoint that serves the routing config + prompts (kept here for visibility;
+    # mcp_client reads MCP_SERVER_URL from env directly to avoid an import cycle).
+    mcp_server_url: str = "http://localhost:8000/mcp"
 
-    # Default persona key; resolved against the `personas` map in llm_models.yaml.
+    # Default persona key; resolved against the `personas` map served by the MCP server.
     default_persona: str = "default"
 
 
@@ -47,9 +43,11 @@ settings = get_settings()
 
 @lru_cache
 def load_llm_config() -> dict:
-    """Load and cache the LLM routing file (llms catalog + role->llm map + personas)."""
-    with open(settings.llm_models_path) as fh:
-        return yaml.safe_load(fh)
+    """Return the LLM routing config (llms catalog + role->llm map + personas).
+
+    Fetched from the MCP server (``llm-config://routing``) and cached for the process.
+    """
+    return mcp_client.fetch_config()
 
 
 def llm_spec_for(role: str) -> dict:
