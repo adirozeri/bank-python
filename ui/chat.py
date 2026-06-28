@@ -34,20 +34,30 @@ def post_ask(question: str, thread_id: str | None) -> dict:
 
 
 def render_answer(result: dict) -> None:
-    """Render one assistant turn: the answer plus any SQL/rows the tools produced."""
+    """Render one assistant turn (the natural-language answer; the API never returns SQL/rows)."""
     st.markdown(result.get("answer", "_(no answer)_"))
-    for q in result.get("queries", []):
-        with st.expander(f"{q['tool']} — SQL & rows ({len(q['rows'])})"):
-            st.code(q["sql"], language="sql")
-            if q["rows"]:
-                st.dataframe(q["rows"], use_container_width=True)
+
+
+# --- Sidebar: S3 presigned-URL image demo ---
+# The UI stays HTTP-only: it asks the API for a presigned URL, then st.image lets the
+# browser fetch the image straight from S3 with that signed link.
+with st.sidebar:
+    st.subheader("S3 image (presigned URL)")
+    if st.button("Load image from S3"):
+        try:
+            r = requests.get(f"{API_URL}/s3/image-url", timeout=30)
+            r.raise_for_status()
+            st.image(r.json()["url"])
+        except Exception as e:
+            st.error(f"Couldn't load image: {e}")
 
 
 # --- State ---
 # messages: [{"role": "user", "text": str} | {"role": "assistant", "result": dict}]
-# thread_id: ties every turn to one server-side conversation (carries memory).
 if "messages" not in st.session_state:
     st.session_state.messages = []
+
+# thread_id: ties every turn to one server-side conversation (carries memory).
 if "thread_id" not in st.session_state:
     st.session_state.thread_id = None
 
@@ -63,10 +73,19 @@ for msg in st.session_state.messages:
 
 # --- New turn ---
 if question := st.chat_input("Ask a question…"):
+    # Render the user's message immediately, BEFORE the (blocking) API call, so it appears
+    # right away instead of only after the server responds.
     st.session_state.messages.append({"role": "user", "text": question})
-    result = post_ask(question, st.session_state.thread_id)
+    with st.chat_message("user"):
+        st.markdown(question)
+
+    # Show an animated "thinking" indicator while the server generates the answer.
+    with st.chat_message("assistant"):
+        with st.spinner("Generating response…"):
+            result = post_ask(question, st.session_state.thread_id)
+        render_answer(result)
+
     # Remember the thread so the next turn continues the same conversation.
     if result.get("thread_id"):
         st.session_state.thread_id = result["thread_id"]
     st.session_state.messages.append({"role": "assistant", "result": result})
-    st.rerun()

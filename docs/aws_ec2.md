@@ -480,7 +480,13 @@ CREATE USER IF NOT EXISTS BANK_APP
   MUST_CHANGE_PASSWORD = FALSE;
 GRANT ROLE BANK_APP_ROLE TO USER BANK_APP;
 
--- 5. Find your account identifier (the <account> part of ANALYTICS_URL):
+-- 5. Also grant the role to YOUR OWN login, so you can `USE ROLE BANK_APP_ROLE`
+--    to run the manual DDL in step 12 (without this you'll get
+--    "Requested role 'BANK_APP_ROLE' is not assigned to the executing user").
+SET me = CURRENT_USER();
+GRANT ROLE BANK_APP_ROLE TO USER IDENTIFIER($me);
+
+-- 6. Find your account identifier (the <account> part of ANALYTICS_URL):
 SELECT CURRENT_ORGANIZATION_NAME() || '-' || CURRENT_ACCOUNT_NAME() AS account_identifier;
 ```
 **What:** the Snowflake side — storage (db/schema), compute (warehouse), and a least-
@@ -510,13 +516,38 @@ AWS, not on any AWS free tier) plus storage. Auto-suspend keeps it near-zero whe
 accounts get trial credits.
 
 ### 12. Create the table in Snowflake
-Create `transactions` (DDL, or `create_all` against the analytics engine).
+Either let the sync auto-create it (`scripts/sync_to_snowflake.py` runs `create_all` on the
+analytics engine the first time), **or** create it explicitly with DDL. In a worksheet, run
+as `BANK_APP_ROLE` so the role *owns* the table (and can then read + load it):
+```sql
+USE ROLE BANK_APP_ROLE;
+USE WAREHOUSE BANK_WH;
+USE SCHEMA BANK_DB.ANALYTICS;
+
+-- Mirrors app/models.py Transaction (+ created_at from Base).
+CREATE TABLE IF NOT EXISTS transactions (
+    id            STRING       PRIMARY KEY,
+    account_id    STRING       NOT NULL,
+    amount        FLOAT        NOT NULL,
+    currency      STRING,
+    type          STRING,      -- debit | credit | transfer
+    status        STRING,      -- pending | completed | failed
+    counterparty  STRING,
+    category      STRING,
+    description   STRING,
+    created_at    TIMESTAMP_NTZ
+);
+
+-- quick check:
+SELECT COUNT(*) FROM transactions;   -- 0 until the sync runs
+```
 **What:** a landing place for the synced rows and for `/ask` to read.
 
 **Why:** mirror the Postgres table (same columns) so the sync copies rows 1:1; Snowflake
-just stores them in its own columnar format.
+just stores them in its own columnar format. (Snowflake accepts `PRIMARY KEY`/`NOT NULL`
+syntax but doesn't enforce them — they're documentation here.)
 
-**You fill in:** nothing new — reuse the existing model.
+**You fill in:** nothing new — the column list matches the existing model; reuse as-is.
 
 **Creates:** the **`transactions` table** in the Snowflake database/schema (empty until the
 sync runs).
@@ -528,10 +559,18 @@ Generic form:
 ```
 ANALYTICS_URL=snowflake://<user>:<password>@<account>/<database>/<schema>?warehouse=<wh>&role=<role>
 ```
-Filled in with the step-11 names (only `<password>` and `<account>` left to drop in):
+Filled in with the step-11 names and this account (`FRHEVVQ-VX48069`):
 ```
-ANALYTICS_URL=snowflake://BANK_APP:<password>@<account>/BANK_DB/ANALYTICS?warehouse=BANK_WH&role=BANK_APP_ROLE
+ANALYTICS_URL=snowflake://BANK_APP:<password>@FRHEVVQ-VX48069/BANK_DB/ANALYTICS?warehouse=BANK_WH&role=BANK_APP_ROLE
 ```
+The real value (with the password) lives in your **gitignored `.env`**, not here — this doc
+is committed to a public repo, and a live Snowflake login can burn account credits.
+
+> **Percent-encode special characters in the password.** A raw `#` ends the URL early and a
+> raw `$` can trigger `.env` variable expansion. Encode them: `$` → `%24`, `#` → `%23`. So a
+> password `Tk9$mQp2vXz#8Lr` becomes `Tk9%24mQp2vXz%238Lr` in the URL. SQLAlchemy decodes it
+> back before connecting.
+
 **What:** the Snowflake connection string, added to the same `.env` the app already reads.
 
 **Why a separate var:** the app now talks to **two** databases — `DATABASE_URL` (Postgres,
@@ -584,12 +623,17 @@ transfer. Writes and correctness checks must hit the authoritative store.
 **Cost:** free.
 
 ### 16. Add the sync job (host cron) `$`
-Write `scripts/sync_to_snowflake.py` (copy new rows by `created_at`), then add a host crontab
-entry on the box:
+`scripts/sync_to_snowflake.py` already exists (copies new rows by `created_at`). Amazon Linux
+2023 has no cron by default, so install + start it first, then add the crontab entry:
 ```bash
+sudo dnf install -y cronie
+sudo systemctl enable --now crond        # start the cron daemon (and on every boot)
+
 crontab -e
-# every 15 minutes, run the sync inside the app container (module form — see step 8 note):
-*/15 * * * * cd /home/ec2-user/bank-python && /usr/bin/docker compose run --rm app python -m scripts.sync_to_snowflake >> sync.log 2>&1
+# every 24 hours (daily at midnight, server time/UTC) — module form, see step 8 note:
+0 0 * * * cd /home/ec2-user/bank-python && /usr/bin/docker compose run --rm app python -m scripts.sync_to_snowflake >> sync.log 2>&1
+
+crontab -l                               # verify the entry is saved
 ```
 **What:** a recurring job that copies new Postgres rows into Snowflake. On EC2 this is just
 the box's own `cron`, running the script inside a throwaway app container.
@@ -607,12 +651,36 @@ wakes the Snowflake warehouse**, burning credits (step 11). A wider interval + a
 keeps it cheap.
 
 ### 17. Verify (mind the lag)
-Create a transfer (write → Postgres), run the sync manually once, then ask `/ask` (reads →
-Snowflake) and confirm the new row shows up.
+Create a transfer (write → Postgres), **run the sync manually once**, then ask `/ask`
+(reads → Snowflake) and confirm the new row shows up.
+
+**Run the sync manually** (the same command the hourly cron runs, just on demand) — on the
+box, from `~/bank-python`:
+```bash
+docker compose run --rm app python -m scripts.sync_to_snowflake
+# expect: "Synced N transaction(s) created after ..."
+```
+- `run --rm app` starts a throwaway container from the `app` service and removes it after.
+- `-m scripts.sync_to_snowflake` runs the sync as a module (see the step 8 note on why not
+  `python scripts/...`).
+- It reads new rows from Postgres and loads them into Snowflake; re-running it is safe —
+  it's incremental by `created_at`, so a second run with no new rows reports `Synced 0`.
+
+Then confirm the data landed:
+```bash
+# via the API/UI:
+curl http://localhost:8000/ask -X POST -H 'Content-Type: application/json' \
+  -d '{"question":"how many transactions are there?"}'
+# or directly in a Snowflake worksheet:
+#   SELECT COUNT(*) FROM BANK_DB.ANALYTICS.transactions;
+```
+
 **What:** end-to-end test of the dual-engine setup.
 
-**Why "mind the lag":** the row won't appear in `/ask` until the next sync runs — that delay
-is the eventual consistency. Running the sync manually first removes the timing variable.
+**Why "mind the lag":** the row won't appear in `/ask` until a sync runs — that delay
+(up to your cron interval, now **24 h**) is the eventual consistency. With a daily sync the
+data can be almost a full day stale, so **run the sync manually** (above) whenever you need
+`/ask` to reflect recent writes immediately.
 
 **You fill in:** nothing — read-only checks (plus one test row).
 
@@ -630,6 +698,8 @@ is the eventual consistency. Running the sync manually first removes the timing 
 | app `Exited (1)`, `connection to "localhost" … refused` | `DATABASE_URL` uses `localhost` | use host `postgres` (the Compose service name) |
 | `ModuleNotFoundError: No module named 'app'` on seed | ran the script by path | run `python -m scripts.seed` instead |
 | `the attribute version is obsolete` warning | leftover `version:` key in compose | harmless; removed in the committed file |
+| Snowflake: `Requested role 'BANK_APP_ROLE' is not assigned to the executing user` | the role was granted to `BANK_APP`, not to your login | `GRANT ROLE BANK_APP_ROLE TO USER IDENTIFIER($me)` (step 11.5) |
+| `crontab: command not found` | Amazon Linux 2023 ships no cron | `sudo dnf install -y cronie && sudo systemctl enable --now crond` |
 
 Handy checks while debugging:
 ```bash

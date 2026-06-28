@@ -1,92 +1,503 @@
 {
   "info": {
     "name": "bank-python",
+    "description": "Requests organised by the Practical Test Pyramid (martinfowler.com). Folders map to the article's test types that make sense for a black-box HTTP client.\n\nNOT represented here, on purpose:\n- Unit tests   -> run in-process against functions/classes with mocks; belongs in pytest, not Postman.\n- UI tests     -> the API layer is headless/backend-only; nothing to drive over HTTP.\n- Exploratory  -> manual & creative by definition; cannot be automated.\n\nRun a whole folder with the Postman Collection Runner. End-to-End requests are order-dependent (they pass IDs/thread_ids via collection variables).",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:8000" },
+    { "key": "integ_txn_id", "value": "" },
+    { "key": "e2e_txn_id", "value": "" },
+    { "key": "e2e_thread_id", "value": "" }
+  ],
   "item": [
     {
-      "name": "Health",
-      "request": { "method": "GET", "url": "http://localhost:8000/health" }
-    },
-    {
-      "name": "Create Transaction",
-      "request": {
-        "method": "POST",
-        "header": [{ "key": "Content-Type", "value": "application/json" }],
-        "body": {
-          "mode": "raw",
-          "raw": "{\n  \"account_id\": \"ACC-0001\",\n  \"amount\": 125.50,\n  \"type\": \"debit\",\n  \"status\": \"completed\",\n  \"category\": \"groceries\"\n}"
-        },
-        "url": "http://localhost:8000/transactions"
-      }
-    },
-    {
-      "name": "List Transactions",
-      "request": { "method": "GET", "url": "http://localhost:8000/transactions" }
-    },
-    {
-      "name": "Get Transaction",
-      "request": { "method": "GET", "url": "http://localhost:8000/transactions/PASTE_ID_HERE" }
-    },
-    {
-      "name": "Ask (LLM) - new conversation",
-      "request": {
-        "method": "POST",
-        "header": [{ "key": "Content-Type", "value": "application/json" }],
-        "body": {
-          "mode": "raw",
-          "raw": "{\n  \"question\": \"show me the transactions for account ACC-0001\"\n}"
-        },
-        "url": "http://localhost:8000/ask"
-      },
-      "response": [
+      "name": "Integration Tests",
+      "description": "Test the API's integration with its database. Recipe from the article: write data through the app, then read it back to prove the round-trip persists. Slower than unit tests, fewer of them.",
+      "item": [
         {
-          "name": "answer",
-          "body": "{\n  \"thread_id\": \"<copy this into the follow-up to continue the chat>\",\n  \"answer\": \"Here are the latest transactions for ACC-0001 ...\",\n  \"queries\": [\n    {\n      \"tool\": \"list_transactions\",\n      \"sql\": \"SELECT ...\",\n      \"rows\": []\n    }\n  ]\n}"
+          "name": "Write: create a transaction",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const res = pm.response.json();",
+                  "pm.test('created (2xx)', () => pm.expect(pm.response.code).to.be.oneOf([200, 201]));",
+                  "pm.test('the DB assigned an id', () => pm.expect(res.id).to.be.a('string').and.not.empty);",
+                  "pm.test('amount round-trips unchanged', () => pm.expect(res.amount).to.eql(125.5));",
+                  "pm.test('given status was persisted', () => pm.expect(res.status).to.eql('completed'));",
+                  "pm.collectionVariables.set('integ_txn_id', res.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"account_id\": \"ACC-0001\",\n  \"amount\": 125.50,\n  \"type\": \"debit\",\n  \"status\": \"completed\",\n  \"category\": \"groceries\"\n}"
+            },
+            "url": "{{baseUrl}}/transactions"
+          }
+        },
+        {
+          "name": "Read back: fetch it by id",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const res = pm.response.json();",
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('the same record came back out of the DB', () => pm.expect(res.id).to.eql(pm.collectionVariables.get('integ_txn_id')));",
+                  "pm.test('account matches what was written', () => pm.expect(res.account_id).to.eql('ACC-0001'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/transactions/{{integ_txn_id}}"
+          }
+        },
+        {
+          "name": "Read: filter reaches the DB (WHERE account_id)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const res = pm.response.json();",
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('an array is returned', () => pm.expect(res).to.be.an('array'));",
+                  "pm.test('every row honours the filter', () => res.forEach(t => pm.expect(t.account_id).to.eql('ACC-0001')));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/transactions?account_id=ACC-0001"
+          }
         }
       ]
     },
     {
-      "name": "Ask (LLM) - follow-up (same thread)",
-      "request": {
-        "method": "POST",
-        "header": [{ "key": "Content-Type", "value": "application/json" }],
-        "body": {
-          "mode": "raw",
-          "raw": "{\n  \"question\": \"what about its balance?\",\n  \"thread_id\": \"PASTE_THREAD_ID_FROM_PREVIOUS_RESPONSE\"\n}"
-        },
-        "url": "http://localhost:8000/ask"
-      }
-    },
-    {
-      "name": "Ask (LLM) - transfer Step 1: request",
-      "request": {
-        "method": "POST",
-        "header": [{ "key": "Content-Type", "value": "application/json" }],
-        "body": {
-          "mode": "raw",
-          "raw": "{\n  \"question\": \"I'm ACC-0001, transfer 100 USD to ACC-0002\"\n}"
-        },
-        "url": "http://localhost:8000/ask"
-      },
-      "response": [
+      "name": "Contract Tests (CDC)",
+      "description": "Lightweight stand-in for Consumer-Driven Contracts. True CDC uses Pact (a published pact file + provider verification handshake) - Postman can only assert that each response matches the JSON schema a consumer (the Streamlit UI, scripts, other services) relies on. Treat these as the documented response contract for this provider.",
+      "item": [
         {
-          "name": "awaiting confirmation",
-          "body": "{\n  \"thread_id\": \"<reuse this in Step 2>\",\n  \"answer\": \"Please confirm: transfer 100.0 USD from ACC-0001 to ACC-0002? (yes/no)\"\n}"
+          "name": "Contract: /health",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const schema = { type: 'object', required: ['status'], properties: { status: { type: 'string' } } };",
+                  "pm.test('health matches contract', () => pm.response.to.have.jsonSchema(schema));",
+                  "pm.test('status is ok', () => pm.expect(pm.response.json().status).to.eql('ok'));"
+                ]
+              }
+            }
+          ],
+          "request": { "method": "GET", "url": "{{baseUrl}}/health" }
+        },
+        {
+          "name": "Contract: transaction object (POST /transactions)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const txn = {",
+                  "  type: 'object',",
+                  "  required: ['id', 'account_id', 'amount', 'currency', 'type', 'status'],",
+                  "  properties: {",
+                  "    id: { type: 'string' },",
+                  "    account_id: { type: 'string' },",
+                  "    amount: { type: 'number' },",
+                  "    currency: { type: 'string' },",
+                  "    type: { type: 'string' },",
+                  "    status: { type: 'string' },",
+                  "    counterparty: { type: ['string', 'null'] },",
+                  "    category: { type: ['string', 'null'] },",
+                  "    description: { type: ['string', 'null'] }",
+                  "  }",
+                  "};",
+                  "pm.test('transaction matches the agreed contract', () => pm.response.to.have.jsonSchema(txn));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"account_id\": \"ACC-0001\",\n  \"amount\": 42.00,\n  \"type\": \"credit\",\n  \"status\": \"pending\"\n}"
+            },
+            "url": "{{baseUrl}}/transactions"
+          }
+        },
+        {
+          "name": "Contract: transaction list (GET /transactions)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const txn = {",
+                  "  type: 'object',",
+                  "  required: ['id', 'account_id', 'amount', 'currency', 'type', 'status'],",
+                  "  properties: {",
+                  "    id: { type: 'string' },",
+                  "    account_id: { type: 'string' },",
+                  "    amount: { type: 'number' },",
+                  "    currency: { type: 'string' },",
+                  "    type: { type: 'string' },",
+                  "    status: { type: 'string' }",
+                  "  }",
+                  "};",
+                  "pm.test('list is an array of contract-shaped transactions', () => pm.response.to.have.jsonSchema({ type: 'array', items: txn }));"
+                ]
+              }
+            }
+          ],
+          "request": { "method": "GET", "url": "{{baseUrl}}/transactions" }
+        },
+        {
+          "name": "Contract: /ask response",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const schema = {",
+                  "  type: 'object',",
+                  "  required: ['thread_id', 'answer'],",
+                  "  properties: {",
+                  "    thread_id: { type: 'string' },",
+                  "    answer: { type: 'string' }",
+                  "  }",
+                  "};",
+                  "pm.test('/ask matches the contract (thread_id + answer only; no SQL/rows)', () => pm.response.to.have.jsonSchema(schema));",
+                  "pm.test('the response never exposes SQL or rows', () => { const r = pm.response.json(); pm.expect(r.queries).to.be.undefined; pm.expect(r.sql).to.be.undefined; pm.expect(r.rows).to.be.undefined; });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"question\": \"show me the transactions for account ACC-0001\"\n}"
+            },
+            "url": "{{baseUrl}}/ask"
+          }
         }
       ]
     },
     {
-      "name": "Ask (LLM) - transfer Step 2: confirm with 'yes'",
-      "request": {
-        "method": "POST",
-        "header": [{ "key": "Content-Type", "value": "application/json" }],
-        "body": {
-          "mode": "raw",
-          "raw": "{\n  \"question\": \"yes\",\n  \"thread_id\": \"PASTE_THREAD_ID_FROM_STEP_1\"\n}"
+      "name": "End-to-End Tests",
+      "description": "A single high-value user journey through the real, deployed API: create a transaction -> see it in the account -> ask the assistant about it -> follow up in the same thread. Order-dependent: run top-to-bottom (Collection Runner). The article keeps these few because they are slow and flaky; this is the REST-API equivalent of an end-to-end test (no web UI to drive).",
+      "item": [
+        {
+          "name": "Step 1: customer makes a transaction",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const res = pm.response.json();",
+                  "pm.test('created', () => pm.expect(pm.response.code).to.be.oneOf([200, 201]));",
+                  "pm.collectionVariables.set('e2e_txn_id', res.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"account_id\": \"ACC-0001\",\n  \"amount\": 9.99,\n  \"type\": \"debit\",\n  \"status\": \"completed\",\n  \"category\": \"coffee\"\n}"
+            },
+            "url": "{{baseUrl}}/transactions"
+          }
         },
-        "url": "http://localhost:8000/ask"
-      }
+        {
+          "name": "Step 2: it appears in the account's history",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const res = pm.response.json();",
+                  "const id = pm.collectionVariables.get('e2e_txn_id');",
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('the new transaction is in the list', () => pm.expect(res.map(t => t.id)).to.include(id));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/transactions?account_id=ACC-0001"
+          }
+        },
+        {
+          "name": "Step 3: analyst asks the assistant about the account",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const res = pm.response.json();",
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('a natural-language answer comes back', () => pm.expect(res.answer).to.be.a('string').and.not.empty);",
+                  "pm.test('no SQL/rows are exposed to the caller', () => pm.expect(res.queries).to.be.undefined);",
+                  "pm.collectionVariables.set('e2e_thread_id', res.thread_id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"question\": \"show me the transactions for account ACC-0001\"\n}"
+            },
+            "url": "{{baseUrl}}/ask"
+          }
+        },
+        {
+          "name": "Step 4: follow-up in the same conversation",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('the follow-up is answered', () => pm.expect(pm.response.json().answer).to.be.a('string').and.not.empty);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"question\": \"what is its balance?\",\n  \"thread_id\": \"{{e2e_thread_id}}\"\n}"
+            },
+            "url": "{{baseUrl}}/ask"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Acceptance Tests",
+      "description": "Business rules described in plain language (Given / When / Then), asserting observable behaviour rather than implementation. Can live at any pyramid level; here they exercise the API directly.",
+      "item": [
+        {
+          "name": "Scenario: a new transaction defaults currency to USD",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const res = pm.response.json();",
+                  "pm.test('Then it is stored with the status it was given', () => pm.expect(res.status).to.eql('completed'));",
+                  "pm.test('And currency defaults to USD when not supplied', () => pm.expect(res.currency).to.eql('USD'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"account_id\": \"ACC-0001\",\n  \"amount\": 10.00,\n  \"type\": \"credit\",\n  \"status\": \"completed\"\n}"
+            },
+            "url": "{{baseUrl}}/transactions"
+          }
+        },
+        {
+          "name": "Scenario: looking up an unknown transaction is rejected",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Then the API responds 404', () => pm.response.to.have.status(404));",
+                  "pm.test('And explains the transaction was not found', () => pm.expect(pm.response.json().detail).to.eql('Transaction not found'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/transactions/does-not-exist"
+          }
+        },
+        {
+          "name": "Scenario: an analyst can ask a question in plain English",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const res = pm.response.json();",
+                  "pm.test('Then a human-readable answer is returned', () => pm.expect(res.answer).to.be.a('string').and.not.empty);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"question\": \"how many transactions does ACC-0001 have?\"\n}"
+            },
+            "url": "{{baseUrl}}/ask"
+          }
+        },
+        {
+          "name": "Scenario: a money transfer must be confirmed before it happens",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const res = pm.response.json();",
+                  "pm.test('Then the assistant asks for confirmation before moving money', () => pm.expect(res.answer.toLowerCase()).to.include('confirm'));",
+                  "pm.test('And the reply exposes no SQL/rows', () => pm.expect(res.queries).to.be.undefined);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"question\": \"I'm ACC-0001, transfer 100 USD to ACC-0002\"\n}"
+            },
+            "url": "{{baseUrl}}/ask"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Examples (manual driving, no assertions)",
+      "description": "The original hand-driving requests. The API is meant to be driven via Postman (see CLAUDE.md); these are kept for poking at endpoints by hand. They have no test scripts.",
+      "item": [
+        {
+          "name": "Health",
+          "request": { "method": "GET", "url": "{{baseUrl}}/health" }
+        },
+        {
+          "name": "Create Transaction",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"account_id\": \"ACC-0001\",\n  \"amount\": 125.50,\n  \"type\": \"debit\",\n  \"status\": \"completed\",\n  \"category\": \"groceries\"\n}"
+            },
+            "url": "{{baseUrl}}/transactions"
+          }
+        },
+        {
+          "name": "List Transactions",
+          "request": { "method": "GET", "url": "{{baseUrl}}/transactions" }
+        },
+        {
+          "name": "Get Transaction",
+          "request": { "method": "GET", "url": "{{baseUrl}}/transactions/PASTE_ID_HERE" }
+        },
+        {
+          "name": "Ask (LLM) - new conversation",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"question\": \"show me the transactions for account ACC-0001\"\n}"
+            },
+            "url": "{{baseUrl}}/ask"
+          },
+          "response": [
+            {
+              "name": "answer",
+              "body": "{\n  \"thread_id\": \"<copy this into the follow-up to continue the chat>\",\n  \"answer\": \"Here are the latest transactions for ACC-0001 ...\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "Ask (LLM) - follow-up (same thread)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"question\": \"what about its balance?\",\n  \"thread_id\": \"PASTE_THREAD_ID_FROM_PREVIOUS_RESPONSE\"\n}"
+            },
+            "url": "{{baseUrl}}/ask"
+          }
+        },
+        {
+          "name": "Ask (LLM) - transfer Step 1: request",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"question\": \"I'm ACC-0001, transfer 100 USD to ACC-0002\"\n}"
+            },
+            "url": "{{baseUrl}}/ask"
+          },
+          "response": [
+            {
+              "name": "awaiting confirmation",
+              "body": "{\n  \"thread_id\": \"<reuse this in Step 2>\",\n  \"answer\": \"Please confirm: transfer 100.0 USD from ACC-0001 to ACC-0002? (yes/no)\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "Ask (LLM) - transfer Step 2: confirm with 'yes'",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"question\": \"yes\",\n  \"thread_id\": \"PASTE_THREAD_ID_FROM_STEP_1\"\n}"
+            },
+            "url": "{{baseUrl}}/ask"
+          }
+        }
+      ]
     }
   ]
 }

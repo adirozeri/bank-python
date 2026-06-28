@@ -1,0 +1,5 @@
+# Test & reporting tooling (Phase 4). Kept out of requirements.txt so the production
+# image stays lean. Install with: pip install -r requirements-dev.txt
+pytest
+pytest-html        # per-run self-contained HTML report (see tests/conftest.py hook)
+allure-pytest      # writes Allure result JSON; render with the `allure` CLI (needs Java)

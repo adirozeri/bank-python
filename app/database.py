@@ -12,7 +12,7 @@ connect_args = {"check_same_thread": False} if is_sqlite else {}
 
 # pool_pre_ping validates connections before use, avoiding "server closed the
 # connection unexpectedly" errors when Postgres drops idle conns (common in k8s).
-engine = create_engine(DATABASE_URL, connect_args=connect_args, pool_pre_ping=True)
+engine = create_engine(url=DATABASE_URL, connect_args=connect_args, pool_pre_ping=True)
 SessionLocal = sessionmaker(bind=engine, autoflush=False)
 
 # --- Analytics engine (Snowflake reads) ---
@@ -22,7 +22,7 @@ SessionLocal = sessionmaker(bind=engine, autoflush=False)
 # runs identically everywhere and only "splits" once a Snowflake URL is provided.
 ANALYTICS_URL = os.getenv("ANALYTICS_URL")
 if ANALYTICS_URL:
-    analytics_engine = create_engine(ANALYTICS_URL, pool_pre_ping=True)
+    analytics_engine = create_engine(url=ANALYTICS_URL, pool_pre_ping=True)
     AnalyticsSession = sessionmaker(bind=analytics_engine, autoflush=False)
 else:
     analytics_engine = engine

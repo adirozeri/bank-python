@@ -1,11 +1,18 @@
 from typing import Annotated
 
+from dotenv import load_dotenv
+
+# Load .env before importing anything that reads env vars (LangSmith tracing,
+# provider keys). Done here so EVERY entrypoint — uvicorn, Docker, run.py — picks it up;
+# previously only run.py called load_dotenv(), so tracing was silently off in containers.
+load_dotenv()
+
 from fastapi import Depends, FastAPI, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from . import llm
+from . import llm, s3
 from .database import Base, engine, get_db
 from .models import Transaction
 
@@ -76,11 +83,20 @@ def list_transactions(
 def get_transaction(txn_id: str, db: db_dependency):
     txn = db.get(Transaction, txn_id)
     if not txn:
-        raise HTTPException(404, "Transaction not found")
+        raise HTTPException(status_code=404, detail="Transaction not found")
     return txn
 
 
 @app.post("/ask")
 def ask(data: AskIn):
-    return llm.ask(data.question, data.thread_id)
+    return llm.ask(question=data.question, thread_id=data.thread_id)
+
+
+@app.get("/s3/image-url")
+def s3_image_url():
+    """Return a presigned URL the UI can use to load an image straight from S3."""
+    try:
+        return {"url": s3.generate_image_url()}
+    except Exception as exc:  # credential / bucket / network errors -> clean 502
+        raise HTTPException(status_code=502, detail=f"S3 error: {exc}")
 

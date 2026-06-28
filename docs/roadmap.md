@@ -71,6 +71,17 @@ transactions.
 - [ ] `POST /ask` endpoint that takes a natural-language question and returns an answer
 - [ ] Return both the natural-language answer and the underlying query/rows for transparency
 
+### 1.4a Multi-model agentic workflow — Risk + Judge (see `docs/more_llm_calls_plan.md`)
+- [ ] Three LLM calls: **User Intent** (Gemini) → **Risk Analysis** (Groq) → **Judge** (Gemini)
+- [ ] Config-driven model selection via LangChain wrappers (`app/llm/llm_models.yaml`); no Anthropic
+- [ ] Per-role/per-model prompt files + configurable persona for user-facing text
+- [ ] Transfer gate: execute only when `risk_level != HIGH` **and** Judge = `ACCEPTED`, then
+      **always** the human `interrupt()` confirmation (never auto-execute)
+- [ ] **Hook for a future deterministic risk check** — none exists today, so the gate is
+      purely LLM-driven for now; a rule-based check can later be added as an extra `AND`
+      condition alongside risk + judge
+- [ ] LangSmith traces the runtime model/persona choices (no Langfuse; MCP parked for later)
+
 ### 1.5 Postman
 - [ ] Postman collection covering every endpoint
 - [ ] Environment file (base URL, sample IDs)
@@ -135,7 +146,7 @@ and dashboards.
 - [ ] Unit tests: models, services, LLM SDK helpers
 - [ ] API/integration tests: every endpoint, happy + error paths
 - [ ] LLM SDK tests: deterministic checks + mocked LLM where needed
-- [ ] `allure-pytest` for results; generate Allure HTML report
+- [x] `allure-pytest` for results; generate Allure HTML report (see `docs/allure.md`)
 - [ ] Test data isolation (transactional rollbacks / ephemeral DB)
 - [ ] CI step to run tests and publish the Allure report
 
