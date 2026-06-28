@@ -15,3 +15,4 @@ streamlit
 requests
 snowflake-sqlalchemy
 langgraph-cli[inmem]
+mcp

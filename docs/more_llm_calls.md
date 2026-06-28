@@ -101,3 +101,76 @@ The agentic workflow should provide:
 
 > **Parked for later:** using **MCP** for the configuration and prompt requirements above is
 > out of scope for now.
+
+---
+
+## Addendum — Update (feature branch: `mcp`)
+
+> The following restates and extends the requirements above. It is **additive** — nothing
+> in the sections above changes. The new emphasis is the **MCP** investigation (now an
+> active feature branch rather than parked) and the explicit per-persona / per-model prompt
+> tailoring.
+
+### More LLM calls
+
+The LangGraph should have **3 calls to the LLM**:
+
+1. **First call — User Intent** — *Done.*
+2. **Second call — Risk Analysis**
+   - In the case of performing a **Transaction**, there should be a **Risk Evaluation** of
+     the user status and the transaction he requests.
+   - **NOTE:** if you already implemented **Deterministic Risk Analysis**, keep it. It will
+     be used by the Judge later.
+   - The LLM should receive data to perform Risk Analysis (**balance**, **history of previous
+     transactions**), and return a JSON with **risk level** (`HIGH`, `MID`, `LOW`) and
+     **reason**.
+3. **Third call — LLM as a Judge** to evaluate the Risk Analysis performed by the previous
+   LLM call.
+   - The Judge LLM should be a **different LLM model** to ensure there is no bias (see the
+     configuration instructions below).
+   - The Judge LLM receives data to perform evaluation (the data given to the previous LLM,
+     and the JSON response answer from the LLM). The Judge should return a JSON with
+     **approval** `ACCEPTED` or `DENIED`, and **reason**.
+4. The Transaction will perform **only if** Risk Analysis is **below HIGH** *and* the Judge
+   returned **APPROVED**. If Deterministic Risk Analysis is also implemented, it can be added
+   as another condition.
+
+> **NOTE:** the high priority in this task is the **technical flow** using LangGraph + LLM.
+> The business rules that would exist in a real-world bank application (e.g. bank policy for
+> deciding risk level) are **low priority**.
+
+The end result is the agentic workflow uses **two LLMs for three LLM calls**, and the
+workflow is **more probabilistic and less deterministic**.
+
+### Configuring LLM models
+
+Add support — by **configuration files and code** (**optional: MCP**) — for choosing and
+configuring the LLMs used by the agentic workflow.
+
+- **Configuration files:** create a configuration file indicating which LLMs will be used per
+  **User Intent / Risk Analysis / Judge**. For example, Gemini will be used for User Intent
+  and Judge, Groq used for Risk Analysis. The application will **load the configuration at
+  runtime** for choosing LLMs per operation.
+- **Code abstraction:** create an **Abstraction Layer** for retrieving LLMs at runtime
+  according to the configuration. The Abstraction Layer should allow working with the
+  different models in a simple way. Can use different optional APIs, e.g. LLM Provider SDK,
+  LangChain wrappers, LiteLLM. The Abstraction Layer implementation should set **model-specific
+  parameters**, e.g. max tokens, creativity level, temperature, API version, according to the
+  specific model and API implementation.
+- **Prompt files:** create **tailored system prompt files per model**, e.g. the Judge prompt
+  will be different for Gemini vs Groq.
+- **Prompt per user persona:** in the case where a textual response to the user is generated
+  by an LLM, the text should have a **configurable persona**. For example, for a young user
+  use a more light tone with casual expressions; for an older user use more formal language.
+
+The end result is the agentic workflow has:
+
+- **Multi-model support** enabling model replacement without code changes.
+- **Prompt customization** tailored per agent or model.
+- **Langfuse / LangSmith** traces of the configuration options chosen at runtime.
+- **Cost-aware model routing** — choosing between a fast model and a strong model.
+
+> **NOTE:** optionally, investigate how to use **MCP** for the above configuration and prompt
+> requirements.
+
+> **Feature branch:** `mcp`.

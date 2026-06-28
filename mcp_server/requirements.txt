@@ -1,0 +1,4 @@
+# MCP server service — deliberately minimal, independent of the LangGraph app.
+mcp
+pyyaml
+uvicorn
