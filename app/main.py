@@ -12,7 +12,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from . import llm
+from . import llm, s3
 from .database import Base, engine, get_db
 from .models import Transaction
 
@@ -90,4 +90,13 @@ def get_transaction(txn_id: str, db: db_dependency):
 @app.post("/ask")
 def ask(data: AskIn):
     return llm.ask(question=data.question, thread_id=data.thread_id)
+
+
+@app.get("/s3/image-url")
+def s3_image_url():
+    """Return a presigned URL the UI can use to load an image straight from S3."""
+    try:
+        return {"url": s3.generate_image_url()}
+    except Exception as exc:  # credential / bucket / network errors -> clean 502
+        raise HTTPException(status_code=502, detail=f"S3 error: {exc}")
 
