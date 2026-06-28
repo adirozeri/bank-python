@@ -24,14 +24,15 @@ llms:
     temperature: 0
     thoughts: true
 
-  # Groq. NOTE: `thoughts` only takes effect on reasoning-capable Groq models; llama-3.3 is
-  # a plain chat model, so swap to a reasoning model (e.g. gpt-oss / qwen3) to see reasoning.
+  # Groq. NOTE: `thoughts` must stay false here — llama-3.3 is a plain chat model and Groq
+  # rejects `reasoning_format` on it (400). To get reasoning, switch to a reasoning-capable
+  # model (e.g. gpt-oss / qwen3 / a deepseek-r1 distill) AND set thoughts: true together.
   llm3:
     provider: groq
     model: llama-3.3-70b-versatile
     temperature: 0.2
     max_tokens: 1024
-    thoughts: true
+    thoughts: false
 
   # Anthropic Claude. With thoughts on, the builder enables thinking and forces temperature=1.
   llm4:
