@@ -5,20 +5,32 @@ This is a script, not a pytest test, on purpose: the unit suite stays offline an
 stubs the provider keys with placeholders — both would fight a real-LLM call. Run it when you
 want to inspect what the models actually do:
 
+    # 1) start the MCP server (it now owns the LLM config + prompts):
+    python -m mcp_server.server
+    # 2) then run this probe (in another shell):
     python scripts/trace_risk_judge.py
 
-Requires real GOOGLE_API_KEY + GROQ_API_KEY and LANGSMITH_TRACING=true + LANGSMITH_API_KEY in
+Requires the **MCP server running** — risk_analysis/judge fetch their model config and prompts
+from it over the network (set MCP_SERVER_URL if not the default http://localhost:8000/mcp).
+Also needs real GOOGLE_API_KEY + GROQ_API_KEY and LANGSMITH_TRACING=true + LANGSMITH_API_KEY in
 .env. After it runs, open the `bank-python` project in LangSmith and find the "RiskJudgeProbe"
 trace: it nests the RiskAnalysis and Judge model calls, and — when the assigned LLMs have
 `thoughts: true` (translated per provider in factory.py) — shows the model's reasoning.
 """
 
 import os
+import sys
 import uuid
+from pathlib import Path
 
 from dotenv import load_dotenv
 
-load_dotenv()  # load provider + LangSmith keys before importing app.database / the graph
+# Running `python scripts/trace_risk_judge.py` puts scripts/ (not the repo root) on sys.path,
+# so `import app` would fail. Add the repo root so the script works run directly OR via -m.
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(_REPO_ROOT))
+
+load_dotenv(_REPO_ROOT / ".env")  # load keys before importing app.database / the graph
 
 from langsmith import traceable  # noqa: E402
 
@@ -69,8 +81,27 @@ def run_probe() -> dict:
     return {"risk": state["risk"], "judge": state["judge"]}
 
 
+def require_mcp_server() -> None:
+    """Fail fast with a clear hint if the MCP server (the config/prompts source) is down.
+
+    risk_analysis/judge fetch their model config + prompts from the MCP server, so without it
+    running you'd otherwise hit an opaque connection error deep inside the first model call.
+    """
+    from app.llm import mcp_client
+
+    try:
+        mcp_client.fetch_config()
+    except Exception as exc:  # connection refused / timeout / etc.
+        url = os.getenv("MCP_SERVER_URL", "http://localhost:8000/mcp")
+        raise SystemExit(
+            f"Cannot reach the MCP server at {url} ({exc}).\n"
+            f"Start it first:  python -m mcp_server.server"
+        )
+
+
 if __name__ == "__main__":
 
+    require_mcp_server()
     ensure_seed()
     thread_id = str(uuid.uuid4())
     print(f"thread_id (session) = {thread_id}")
