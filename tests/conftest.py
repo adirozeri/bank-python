@@ -30,6 +30,36 @@ from app.database import Base
 from app.models import Transaction
 
 
+@pytest.fixture(autouse=True)
+def mock_mcp(monkeypatch):
+    """Serve config/prompts to the app's MCP client WITHOUT a running server or network.
+
+    The LangGraph service now fetches its routing config and prompts from the MCP server. To
+    keep unit tests offline, we patch app.llm.mcp_client's fetch_* functions to read the same
+    files the server would serve (via mcp_server.files) — so the canned data can never drift
+    from the real prompts. lru_caches that wrap these are cleared around each test.
+    """
+    from mcp_server import files as mcp_files
+    from app.llm import config, factory, mcp_client
+
+    monkeypatch.setattr(mcp_client, "fetch_config", lambda: mcp_files.read_routing())
+
+    def _fetch_prompt(role):
+        return mcp_files.read_prompt(mcp_client._prompt_name_for(role))
+
+    def _fetch_response_prompt(persona_key=None):
+        return f"{mcp_files.read_prompt('response')}\n\n{mcp_files.resolve_persona(persona_key)}"
+
+    monkeypatch.setattr(mcp_client, "fetch_prompt", _fetch_prompt)
+    monkeypatch.setattr(mcp_client, "fetch_response_prompt", _fetch_response_prompt)
+
+    for cached in (config.load_llm_config, factory.get_llm):
+        cached.cache_clear()
+    yield
+    for cached in (config.load_llm_config, factory.get_llm):
+        cached.cache_clear()
+
+
 @pytest.fixture
 def session_factory(monkeypatch):
     """A sessionmaker bound to a fresh in-memory SQLite DB, wired into app.llm.data_access.

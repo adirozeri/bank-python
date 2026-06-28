@@ -164,25 +164,21 @@ class TestFactory:
 @allure.feature("LLM SDK")
 @allure.story("Prompts & persona")
 class TestPrompts:
-    @allure.title("Each role resolves to its entry in the catalog LLM's prompt file")
+    @allure.title("Each role resolves to its per-model prompt (served by the MCP client)")
     def test_role_prompts(self):
         assert prompts.load_prompt(role="user_intent").startswith("You are a helpful")
         assert prompts.load_prompt(role="risk_analysis").startswith("You are a bank")
         assert prompts.load_prompt(role="judge").startswith("You are an independent")
 
-    @allure.title("A missing role entry raises a clear error")
-    def test_missing_entry(self, tmp_path, monkeypatch):
-        (tmp_path / "llmX.yaml").write_text("user_intent: hi\n")
-        monkeypatch.setattr(prompts.settings, "prompts_dir", tmp_path)
-        monkeypatch.setattr(prompts, "_llm_for_role", lambda role: "llmX")
-        prompts._prompts_for_llm.cache_clear()
+    @allure.title("An unknown role has no prompt and raises a clear error")
+    def test_unknown_role(self):
         with pytest.raises(ValueError):
-            prompts.load_prompt(role="judge")
+            prompts.load_prompt(role="does-not-exist")
 
-    @allure.title("Persona key maps to its tone file")
+    @allure.title("Persona is injected into the user-facing response prompt")
     def test_persona(self):
-        assert prompts.load_persona(persona_key="young").lower().startswith("use a friendly")
-        assert prompts.load_persona(persona_key="default").lower().startswith("use a professional")
+        assert "use a friendly" in prompts.load_response_prompt(persona_key="young").lower()
+        assert "use a professional" in prompts.load_response_prompt(persona_key="default").lower()
 
 
 # --- decision gate (pure) -------------------------------------------------------------
