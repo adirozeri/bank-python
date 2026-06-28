@@ -82,6 +82,16 @@ transactions.
       condition alongside risk + judge
 - [ ] LangSmith traces the runtime model/persona choices (no Langfuse; MCP parked for later)
 
+### 1.4b Config + prompts over MCP (feature branch `mcp`; see `docs/more_llm_calls_mcp_plan.md`, `docs/mcp.md`)
+- [x] Standalone **MCP server** microservice (`mcp_server/`) owning the routing config + prompts
+- [x] Served over **Streamable HTTP**: `llm-config://routing` resource + per-model prompts
+      (`intent_gemini`, `risk_groq`, `judge_gemini`, `response`) + inspection tools
+- [x] LangGraph service is the **MCP client** (`app/llm/mcp_client.py`); fetches over the
+      network; no local config/prompt files remain in `app/llm/`
+- [x] MCP server deployed as its **own Docker image/container**; compose runs it on `:8000`,
+      the app on `:5002` with a healthcheck gate
+- [x] Tests: offline client mock + in-memory MCP server round-trip (37 passing)
+
 ### 1.5 Postman
 - [ ] Postman collection covering every endpoint
 - [ ] Environment file (base URL, sample IDs)

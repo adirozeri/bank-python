@@ -5,7 +5,9 @@
 #                SDK's actual kwargs (e.g. thoughts -> Gemini include_thoughts / Claude
 #                thinking{} / Groq reasoning_format).
 #   2) `roles` — maps each workflow role to ONE catalog entry by name.
-# Loaded at runtime by app/llm/factory.py.
+#
+# This file now lives in the MCP server and is served as the `llm-config://routing` resource;
+# the LangGraph client fetches it at runtime (app/llm/config.py -> mcp_client.fetch_config).
 
 llms:
   # Fast Gemini (default workhorse).
@@ -38,11 +40,13 @@ llms:
     temperature: 0
     thoughts: true
 
-# Which catalog LLM each role uses. Change the value (e.g. judge: llm4) to repoint a role.
+# Which catalog LLM each role uses. The client derives the per-model prompt name from the
+# provider here (e.g. judge -> google -> prompt `judge_gemini`), so repointing a role also
+# repoints its prompt with no code change. Two LLMs across three calls: Gemini + Groq.
 roles:
-  user_intent: llm4     # Call 1 — drives conversation + tool selection
-  risk_analysis: llm4   # Call 2 — scores transfer risk (different vendor than the judge)
-  judge: llm4           # Call 3 — reviews the risk analysis
+  user_intent: llm1     # Call 1 — Gemini — drives conversation + tool selection
+  risk_analysis: llm3   # Call 2 — Groq  — scores transfer risk (different vendor than judge)
+  judge: llm1           # Call 3 — Gemini — reviews the risk analysis (different vendor)
 
 # Persona key -> prompt file under prompts/persona/<name>.md. Controls user-facing tone.
 personas:
