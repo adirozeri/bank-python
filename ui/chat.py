@@ -3,7 +3,8 @@
 A separate process from the API: it only talks HTTP to /ask, so nothing in
 `app/` imports it. Run alongside the API:
 
-    python run.py                  # API on :8000
+    python -m mcp_server.server    # MCP server (config/prompts) on :8000
+    python run.py                  # API on :5002
     streamlit run ui/chat.py       # this UI on :8501
 """
 
@@ -12,7 +13,8 @@ import os
 import requests
 import streamlit as st
 
-API_URL = os.getenv("API_URL", "http://127.0.0.1:8000")
+# The API runs on :5002 (the MCP server owns :8000). Override with API_URL in compose.
+API_URL = os.getenv("API_URL", "http://127.0.0.1:5002")
 
 st.set_page_config(page_title="bank-python chat", page_icon="💬")
 st.title("💬 bank-python")
