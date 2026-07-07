@@ -1,3 +1,4 @@
+import logging
 from typing import Annotated
 
 from dotenv import load_dotenv
@@ -19,6 +20,8 @@ from .models import Transaction
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="bank-python")
+
+logger = logging.getLogger("bank.api")
 
 db_dependency = Annotated[Session, Depends(get_db)]
 
@@ -89,7 +92,17 @@ def get_transaction(txn_id: str, db: db_dependency):
 
 @app.post("/ask")
 def ask(data: AskIn):
-    return llm.ask(question=data.question, thread_id=data.thread_id)
+    # Provider outages (quota, network) must surface as a clean 503, never a raw 500 —
+    # and the provider's error text (which can include account/project details) must not
+    # reach the caller. The full traceback goes to the server log only.
+    try:
+        return llm.ask(question=data.question, thread_id=data.thread_id)
+    except Exception:
+        logger.exception("/ask failed (LLM provider or agent error)")
+        raise HTTPException(
+            status_code=503,
+            detail="The assistant is temporarily unavailable. Please try again later.",
+        )
 
 
 @app.get("/s3/image-url")
