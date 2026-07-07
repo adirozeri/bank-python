@@ -17,6 +17,19 @@ import streamlit as st
 API_URL = os.getenv("API_URL", "http://127.0.0.1:5002")
 
 st.set_page_config(page_title="bank-python chat", page_icon="💬")
+# --- Sidebar: S3 presigned-URL image demo ---
+# The UI stays HTTP-only: it asks the API for a presigned URL, then st.image lets the
+# browser fetch the image straight from S3 with that signed link.
+st.subheader("S3 image (presigned URL)")
+if st.button("Load image from S3"):
+    try:
+        r = requests.get(f"{API_URL}/s3/image-url", timeout=30)
+        r.raise_for_status()
+        st.image(r.json()["url"])
+    except Exception as e:
+        st.error(f"Couldn't load image: {e}")
+
+
 st.title("💬 bank-python")
 st.caption("Ask about transactions or account balances — just keep chatting.")
 
@@ -39,19 +52,6 @@ def render_answer(result: dict) -> None:
     """Render one assistant turn (the natural-language answer; the API never returns SQL/rows)."""
     st.markdown(result.get("answer", "_(no answer)_"))
 
-
-# --- Sidebar: S3 presigned-URL image demo ---
-# The UI stays HTTP-only: it asks the API for a presigned URL, then st.image lets the
-# browser fetch the image straight from S3 with that signed link.
-with st.sidebar:
-    st.subheader("S3 image (presigned URL)")
-    if st.button("Load image from S3"):
-        try:
-            r = requests.get(f"{API_URL}/s3/image-url", timeout=30)
-            r.raise_for_status()
-            st.image(r.json()["url"])
-        except Exception as e:
-            st.error(f"Couldn't load image: {e}")
 
 
 # --- State ---
