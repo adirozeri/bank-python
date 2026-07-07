@@ -12,6 +12,7 @@ decision, and (if approved) confirmed + executed before returning to the agent f
 final natural-language answer.
 """
 
+import re
 from uuid import uuid4
 
 from langchain_core.messages import AIMessage, HumanMessage
@@ -31,6 +32,7 @@ from .nodes import (
     transfer,
 )
 from .state import State
+from .tools import TOOLS
 
 # Per-thread conversation memory. In-process only: history doesn't survive a server
 # restart (fine for Phase 1).
@@ -87,6 +89,19 @@ def _answer_text(message: AIMessage) -> str:
     return "".join(b.get("text", "") for b in content if isinstance(b, dict))
 
 
+def _redact_internal_names(text: str) -> str:
+    """Safety net: never let an internal tool identifier reach the caller (CLAUDE.md rule).
+
+    Names come from tools.TOOLS so new tools are covered automatically; each snake_case
+    identifier is rewritten to its plain-words form (get_balance -> 'get balance'), which
+    de-identifies it while reading like the plain-language description we steer the model toward.
+    The prompt rule in response.md handles the normal case; this only fires if one slips through.
+    """
+    for name in (t.name for t in TOOLS):
+        text = re.sub(rf"\b{re.escape(name)}\b", name.replace("_", " "), text)
+    return text
+
+
 def _run_turn(question: str, config: RunnableConfig, snapshot) -> dict:
     """Resume a paused confirmation interrupt, or start a fresh turn."""
     if snapshot.next:
@@ -108,7 +123,8 @@ def _build_response(thread_id: str, result: dict) -> dict:
     if result.get("__interrupt__"):
         return {"thread_id": thread_id, "answer": result["__interrupt__"][0].value["message"]}
 
-    return {"thread_id": thread_id, "answer": _answer_text(message=result["messages"][-1])}
+    answer = _redact_internal_names(_answer_text(message=result["messages"][-1]))
+    return {"thread_id": thread_id, "answer": answer}
 
 
 def ask(question: str, thread_id: str | None = None) -> dict:
