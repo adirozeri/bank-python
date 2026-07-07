@@ -24,7 +24,7 @@ def query_transactions(account_id: str | None) -> tuple[str, list[dict]]:
     stmt = select(Transaction)
     if account_id:
         stmt = stmt.where(Transaction.account_id == account_id)
-    stmt = stmt.order_by(Transaction.created_at.desc()).limit(20)
+    stmt = stmt.order_by(Transaction.created_at.desc())#.limit(20)
     with AnalyticsSession() as session:
         txns = session.scalars(stmt).all()
         rows = [
@@ -32,6 +32,25 @@ def query_transactions(account_id: str | None) -> tuple[str, list[dict]]:
             for t in txns
         ]
     return str(stmt), rows
+
+
+@traceable(run_type="tool")
+def query_count(account_id: str | None) -> tuple[str, list[dict]]:
+    """Return (sql, rows) with the EXACT transaction count, optionally filtered by account.
+
+    The count is computed in the database (SELECT COUNT(*)) so the agent reports a number the
+    DB produced instead of tallying a row dump itself — the same "precompute, don't make the
+    LLM do arithmetic" principle as risk_features(). LLMs miscount long lists (e.g. 72 -> 75).
+    """
+    stmt = select(func.count()).select_from(Transaction)
+    if account_id:
+        stmt = stmt.where(Transaction.account_id == account_id)
+    with AnalyticsSession() as session:
+        total = int(session.scalar(stmt) or 0)
+    row: dict = {"transaction_count": total}
+    if account_id:
+        row["account_id"] = account_id
+    return str(stmt), [row]
 
 
 @traceable(run_type="tool")
@@ -151,6 +170,12 @@ def risk_features(transfer: dict) -> dict:
 def transactions_json(account_id: str | None) -> str:
     """Convenience for tools: recent transactions as a JSON string."""
     _, rows = query_transactions(account_id=account_id)
+    return json.dumps(rows, default=str)
+
+
+def count_json(account_id: str | None) -> str:
+    """Convenience for tools: exact transaction count as a JSON string."""
+    _, rows = query_count(account_id=account_id)
     return json.dumps(rows, default=str)
 
 

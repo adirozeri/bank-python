@@ -13,11 +13,22 @@ from . import data_access
 
 @tool
 def list_transactions(account_id: str | None = None) -> str:
-    """List recent transactions (up to 20, newest first).
+    """List recent transactions.
 
     Optionally filter to a single account by account_id, e.g. "ACC-0001".
     """
     return data_access.transactions_json(account_id)
+
+
+@tool
+def count_transactions(account_id: str | None = None) -> str:
+    """Return the EXACT number of transactions, computed by the database.
+
+    Use this for "how many" / count questions instead of list_transactions — it returns the
+    precise count so you never have to tally rows yourself (do not count a row list by hand).
+    Optionally filter to a single account by account_id, e.g. "A1".
+    """
+    return data_access.count_json(account_id)
 
 
 @tool
@@ -42,8 +53,9 @@ def create_transfer(
 
 # Bound to the intent model for tool-calling; read tools are dispatched by name in the
 # tools_runner node, which returns their rows to the agent (never to the API caller).
-TOOLS = [list_transactions, get_balance, create_transfer]
+TOOLS = [list_transactions, count_transactions, get_balance, create_transfer]
 READ_HELPERS = {
     "list_transactions": data_access.query_transactions,
+    "count_transactions": data_access.query_count,
     "get_balance": data_access.query_balance,
 }
