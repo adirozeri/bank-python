@@ -38,3 +38,9 @@ runs/
 
 # Local Claude guidance (don't commit)
 CLAUDE.md
+# JMeter load tests: keep the .jmx plan (jmeter/), ignore generated output
+jmeter-report/
+*.jtl
+
+# Root-level generated pytest-html reports (tests/reports/ already ignored above)
+reports/
