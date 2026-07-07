@@ -36,14 +36,19 @@ services:
       timeout: 5s
       retries: 5
 
-  # FastAPI app, built from the Dockerfile. On the EC2 box it reaches Postgres via
-  # the service name `postgres` (set DATABASE_URL=...@postgres:5432/... in .env). Runs on 5002
+  # FastAPI app, built from the Dockerfile. In-container it reaches Postgres and the MCP
+  # server by their Compose service names (DATABASE_URL / MCP_SERVER_URL overrides below);
+  # .env keeps the host-friendly localhost values for `python run.py`. Runs on 5002
   # (the MCP server holds 8000); fetches config/prompts from the `mcp` service over the network.
   app:
     build: .
     container_name: bank-app
     env_file: .env
     environment:
+      # Override .env for in-container networking. .env holds the HOST values
+      # (localhost) so `python run.py` works on the host; these override them when
+      # the app runs as a container, reaching peers by their Compose service names.
+      DATABASE_URL: postgresql://bankuser:bankpass@postgres:5432/bankdb
       MCP_SERVER_URL: http://mcp:8000/mcp   # reach the MCP server by Compose service name
     command:
       - uvicorn
