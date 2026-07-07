@@ -41,15 +41,39 @@ def intent_gemini() -> str:
 
 
 @mcp.prompt()
+def intent_groq() -> str:
+    """Call 1 — User Intent system prompt, tailored for Groq."""
+    return files.read_prompt("intent_groq")
+
+
+@mcp.prompt()
+def intent_claude() -> str:
+    """Call 1 — User Intent system prompt, tailored for Claude."""
+    return files.read_prompt("intent_claude")
+
+
+@mcp.prompt()
 def risk_groq() -> str:
     """Call 2 — Risk Analysis system prompt, tailored for Groq."""
     return files.read_prompt("risk_groq")
 
 
 @mcp.prompt()
+def risk_claude() -> str:
+    """Call 2 — Risk Analysis system prompt, tailored for Claude."""
+    return files.read_prompt("risk_claude")
+
+
+@mcp.prompt()
 def judge_gemini() -> str:
     """Call 3 — Judge system prompt, tailored for Gemini (differs from a Groq judge)."""
     return files.read_prompt("judge_gemini")
+
+
+@mcp.prompt()
+def judge_claude() -> str:
+    """Call 3 — Judge system prompt, tailored for Claude."""
+    return files.read_prompt("judge_claude")
 
 
 @mcp.prompt()

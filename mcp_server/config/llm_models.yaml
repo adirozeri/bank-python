@@ -1,16 +1,5 @@
-# LLM routing for the agentic /ask workflow, in two layers:
-#   1) `llms`  — a CATALOG of named model definitions using NORMALIZED, provider-agnostic
-#                keys (provider, model, temperature, max_tokens, thoughts, thoughts_budget).
-#                The per-provider builders in app/llm/factory.py translate these into each
-#                SDK's actual kwargs (e.g. thoughts -> Gemini include_thoughts / Claude
-#                thinking{} / Groq reasoning_format).
-#   2) `roles` — maps each workflow role to ONE catalog entry by name.
-#
-# This file now lives in the MCP server and is served as the `llm-config://routing` resource;
-# the LangGraph client fetches it at runtime (app/llm/config.py -> mcp_client.fetch_config).
 
 llms:
-  # Fast Gemini (default workhorse).
   llm1:
     provider: google
     model: gemini-2.5-flash
@@ -24,9 +13,6 @@ llms:
     temperature: 0
     thoughts: true
 
-  # Groq. NOTE: `thoughts` must stay false here — llama-3.3 is a plain chat model and Groq
-  # rejects `reasoning_format` on it (400). To get reasoning, switch to a reasoning-capable
-  # model (e.g. gpt-oss / qwen3 / a deepseek-r1 distill) AND set thoughts: true together.
   llm3:
     provider: groq
     model: llama-3.3-70b-versatile
@@ -41,13 +27,11 @@ llms:
     temperature: 0
     thoughts: true
 
-# Which catalog LLM each role uses. The client derives the per-model prompt name from the
-# provider here (e.g. judge -> google -> prompt `judge_gemini`), so repointing a role also
-# repoints its prompt with no code change. Two LLMs across three calls: Gemini + Groq.
 roles:
-  user_intent: llm1     # Call 1 — Gemini — drives conversation + tool selection
-  risk_analysis: llm3   # Call 2 — Groq  — scores transfer risk (different vendor than judge)
-  judge: llm1           # Call 3 — Gemini — reviews the risk analysis (different vendor)
+  user_intent: llm4                          
+  risk_analysis: llm4  
+  judge: llm4          
+                       
 
 # Persona key -> prompt file under prompts/persona/<name>.md. Controls user-facing tone.
 personas:
