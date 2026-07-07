@@ -34,7 +34,12 @@ class TestServerFiles:
     def test_routing_shape(self):
         cfg = mcp_files.read_routing()
         assert set(cfg["roles"]) == {"user_intent", "risk_analysis", "judge"}
-        assert cfg["llms"][cfg["roles"]["risk_analysis"]]["provider"] == "groq"
+        # Every role maps to a catalog llm with a provider the prompt-naming layer understands —
+        # asserted for whatever llm is configured, not pinned to a specific vendor.
+        for role, llm_name in cfg["roles"].items():
+            assert llm_name in cfg["llms"], f"{role} -> unknown llm {llm_name}"
+            provider = cfg["llms"][llm_name]["provider"]
+            assert provider in mcp_client._PROVIDER_FAMILY, f"{role}: unsupported provider {provider}"
 
     @allure.title("Per-model prompt files load by name")
     def test_read_prompt(self):
@@ -57,10 +62,17 @@ class TestServerFiles:
 class TestPromptNaming:
     @allure.title("role + provider resolves to the per-model prompt name")
     def test_names(self):
-        # mock_mcp (autouse) points fetch_config at the real routing file.
-        assert mcp_client._prompt_name_for("user_intent") == "intent_gemini"
-        assert mcp_client._prompt_name_for("risk_analysis") == "risk_groq"
-        assert mcp_client._prompt_name_for("judge") == "judge_gemini"
+        # mock_mcp (autouse) points fetch_config at the real routing file. For whatever llm each
+        # role uses, the derived prompt name must match role_short + provider family AND resolve
+        # to a real prompt file — the invariant that keeps model swaps code-free. The family map
+        # is restated here (not imported) so a broken _PROVIDER_FAMILY is caught, not mirrored.
+        family = {"google": "gemini", "groq": "groq", "anthropic": "claude"}
+        cfg = mcp_files.read_routing()
+        for role in ("user_intent", "risk_analysis", "judge"):
+            provider = cfg["llms"][cfg["roles"][role]]["provider"]
+            name = mcp_client._prompt_name_for(role)
+            assert name == f"{mcp_client._ROLE_SHORT[role]}_{family[provider]}"
+            assert mcp_files.read_prompt(name).strip()  # raises ValueError if the file is missing
 
 
 # --- server MCP surface (in-memory, no socket) ----------------------------------------
@@ -84,13 +96,13 @@ class TestServerSurface:
         routing = _run(go())
         assert routing["roles"]["judge"] in routing["llms"]
 
-    @allure.title("all four prompts are served and non-empty; response carries persona")
+    @allure.title("all five prompts are served and non-empty; response carries persona")
     def test_prompts_roundtrip(self):
         async def go():
             async with connect(mcp_server.mcp._mcp_server) as client:
                 names = [p.name for p in (await client.list_prompts()).prompts]
                 texts = {}
-                for name in ("intent_gemini", "risk_groq", "judge_gemini"):
+                for name in ("intent_gemini", "intent_groq", "risk_groq", "judge_gemini"):
                     gp = await client.get_prompt(name, {})
                     texts[name] = gp.messages[0].content.text
                 resp = await client.get_prompt("response", {"persona_key": "young"})
@@ -98,6 +110,6 @@ class TestServerSurface:
                 return names, texts
 
         names, texts = _run(go())
-        assert {"intent_gemini", "risk_groq", "judge_gemini", "response"} <= set(names)
+        assert {"intent_gemini", "intent_groq", "risk_groq", "judge_gemini", "response"} <= set(names)
         assert all(t.strip() for t in texts.values())
         assert "friendly" in texts["response"].lower()
