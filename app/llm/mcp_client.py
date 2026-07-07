@@ -19,7 +19,7 @@ import threading
 from functools import lru_cache
 
 from mcp import ClientSession
-from mcp.client.streamable_http import streamablehttp_client
+from mcp.client.streamable_http import streamable_http_client
 
 
 def _server_url() -> str:
@@ -40,9 +40,7 @@ def _get_loop() -> asyncio.AbstractEventLoop:
         with _loop_lock:
             if _loop is None:
                 loop = asyncio.new_event_loop()
-                threading.Thread(
-                    target=loop.run_forever, daemon=True, name="mcp-client-loop"
-                ).start()
+                threading.Thread(target=loop.run_forever, daemon=True, name="mcp-client-loop").start()
                 _loop = loop
     return _loop
 
@@ -54,7 +52,7 @@ def _run(coro):
 
 async def _with_session(fn):
     """Open a Streamable-HTTP session, initialize it, run ``fn(session)``, then tear down."""
-    async with streamablehttp_client(_server_url()) as (read, write, _):
+    async with streamable_http_client(_server_url()) as (read, write, _):
         async with ClientSession(read, write) as session:
             await session.initialize()
             return await fn(session)
