@@ -23,6 +23,10 @@ class Settings(BaseSettings):
     google_api_key: str | None = None
     groq_api_key: str | None = None
     anthropic_api_key: str | None = None
+    cerebras_api_key: str | None = None
+    mistral_api_key: str | None = None
+    openrouter_api_key: str | None = None  # for the OpenAI-compatible OpenRouter endpoint
+    openai_api_key: str | None = None      # real OpenAI, if ever used (openrouter key wins for it)
 
     # MCP server endpoint that serves the routing config + prompts (kept here for visibility;
     # mcp_client reads MCP_SERVER_URL from env directly to avoid an import cycle).
@@ -53,7 +57,7 @@ def load_llm_config() -> dict:
 def llm_spec_for(role: str) -> dict:
     """Resolve a role -> its named catalog LLM -> that LLM's definition dict.
 
-    Two-layer lookup: roles map a role to a catalog name (e.g. judge -> 'llm1'), and `llms`
+    Two-layer lookup: roles map a role to a catalog name (e.g. judge -> 'claude_sonnet'), and `llms`
     holds the actual provider/model/params. Raises ValueError if either lookup fails.
     """
     cfg = load_llm_config()
