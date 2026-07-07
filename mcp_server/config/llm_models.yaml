@@ -1,37 +1,137 @@
 
 llms:
-  llm1:
+  # Fast Gemini (default free workhorse).
+  gemini_flash:
     provider: google
     model: gemini-2.5-flash
     temperature: 0
-    thoughts: true
+    thoughts: false
 
   # Strong Gemini.
-  llm2:
+  gemini_pro:
     provider: google
     model: gemini-2.5-pro
     temperature: 0
-    thoughts: true
+    thoughts: false
 
-  llm3:
+  groq_llama33_70b:
     provider: groq
     model: llama-3.3-70b-versatile
     temperature: 0.2
     max_tokens: 1024
     thoughts: false
 
-  # Anthropic Claude. With thoughts on, the builder enables thinking and forces temperature=1.
-  llm4:
+  # Anthropic Claude. (`thoughts` is ignored everywhere now — extended thinking is disabled.)
+  claude_sonnet:
     provider: anthropic
     model: claude-sonnet-4-6
     temperature: 0
-    thoughts: true
+    thoughts: false
+# ---- Additional free options below ----
 
-roles:
-  user_intent: llm4                          
-  risk_analysis: llm4  
-  judge: llm4          
-                       
+  # Gemini Flash-Lite. Same 1,500 req/day free ceiling as Flash but the
+  # highest free RPM of the Gemini line, and 1M-token context even on free.
+  # No credit card, resets daily, not a trial. Prompts may train Google's
+  # models unless you're in the EU/UK/EEA.
+  gemini_flash_lite:
+    provider: google
+    model: gemini-2.5-flash-lite
+    temperature: 0
+    thoughts: false
+
+  # Groq Llama 3.1 8B Instant. Fastest option here (~840 tok/s). Free tier is
+  # more generous on RPD than the 70B: 30 RPM, and up to 14,400 req/day on the
+  # light models. Open weights only. Limits are org-level: extra API keys do
+  # NOT raise them.
+  groq_llama31_8b:
+    provider: groq
+    model: llama-3.1-8b-instant
+    temperature: 0.2
+    max_tokens: 1024
+    thoughts: false
+
+  # Cerebras Llama 3.3 70B. Best free tier for raw daily VOLUME: ~1M tokens/day,
+  # very high throughput (up to ~2,000 tok/s). No credit card. Good for batch
+  # work where you need tokens, not the frontier. Open weights only.
+  cerebras_llama33_70b:
+    provider: cerebras
+    model: llama-3.3-70b
+    temperature: 0
+    thoughts: false
+
+  # OpenRouter free models, reached through an OpenAI-compatible endpoint.
+  # Free tier: ~20 RPM and 50-1000 req/day across 28+ ":free" models
+  # (DeepSeek R1, Qwen3 Coder 480B, Llama 4 Scout, etc). One key, many models,
+  # good as a fallback lane. The daily floor rises from 50 to 1000 permanently
+  # once you've put $10 of credit on the account (credit never expires).
+  openrouter_deepseek_r1:
+    provider: openai
+    base_url: https://openrouter.ai/api/v1
+    model: deepseek/deepseek-r1:free
+    temperature: 0
+    thoughts: false  # R1 reasons internally regardless; the flag is ignored by the code
+
+  # Mistral La Plateforme, Experiment (free) tier. Among the most generous
+  # permanent quotas (~1B tokens/month) BUT you must opt in to data training
+  # to use it. EU-hosted, GDPR-friendly. Do not send anything sensitive.
+  mistral_small:
+    provider: mistralai
+    model: mistral-small-latest
+    temperature: 0
+    thoughts: false
+
+  # Local model via Ollama. The only genuinely UNLIMITED option: no RPM/RPD,
+  # no token cap, no data leaving your machine. "Cost" is your own hardware
+  # (RAM/VRAM) and speed. Ideal default for pytest so tests aren't rate-limited.
+  # Requires `ollama serve` running and the model pulled locally.
+  ollama_llama31_8b:
+    provider: ollama
+    model: llama3.1:8b
+    base_url: http://localhost:11434
+    temperature: 0
+    thoughts: false
+
+# Named role configurations. Each maps the three workflow roles to catalog LLMs above.
+# Switch the live one with `selected_roles_configuration` below — no need to edit role lines.
+# (Env var SELECTED_ROLES_CONFIGURATION overrides this selector at runtime, no rebuild needed.)
+role_configs:
+  # Max quality (paid). Claude for all three: best tool-use, reasoning, and consistency.
+  # Single-vendor; costs money. This is the default.
+  max_quality:
+    user_intent: claude_sonnet
+    risk_analysis: claude_sonnet
+    judge: claude_sonnet
+
+  # Balanced free, cross-vendor. Gemini drives + judges, Groq scores risk (judge != risk
+  # vendor to cut bias). Solid quality at zero cost; Gemini free tier has daily caps.
+  balanced_free:
+    user_intent: gemini_flash
+    risk_analysis: groq_llama33_70b
+    judge: gemini_flash
+
+  # Fastest free. Groq 8B for chat + Groq 70B for risk, Gemini-lite judge. Very high
+  # throughput and daily limits; smaller models are weaker on hard judgement.
+  fastest_free:
+    user_intent: groq_llama31_8b
+    risk_analysis: groq_llama33_70b
+    judge: gemini_flash_lite
+
+  # Reasoning-heavy free. DeepSeek-R1 scores risk, Cerebras 70B drives + judges. Strong on
+  # nuanced risk analysis; R1 is slower and verbose (emits reasoning tokens).
+  reasoning_free:
+    user_intent: cerebras_llama33_70b
+    risk_analysis: openrouter_deepseek_r1
+    judge: cerebras_llama33_70b
+
+  # Fully local / offline (Ollama). Unlimited, no keys, private, works offline. Quality is
+  # bounded by your hardware and the 8B model; slower on CPU. Needs `ollama serve`.
+  local_offline:
+    user_intent: ollama_llama31_8b
+    risk_analysis: ollama_llama31_8b
+    judge: ollama_llama31_8b
+
+# Which configuration is live (override with env SELECTED_ROLES_CONFIGURATION).
+selected_roles_configuration: max_quality
 
 # Persona key -> prompt file under prompts/persona/<name>.md. Controls user-facing tone.
 personas:

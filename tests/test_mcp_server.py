@@ -53,6 +53,34 @@ class TestServerFiles:
         assert mcp_files.resolve_persona(None).lower().startswith("use a professional")
 
 
+@allure.epic("Unit tests")
+@allure.feature("MCP server")
+@allure.story("Role configuration selection")
+class TestRoleConfigSelection:
+    @allure.title("read_routing resolves `roles` from the selected named configuration")
+    def test_selected_config_resolves_to_roles(self):
+        cfg = mcp_files.read_routing()
+        selected = cfg["selected_roles_configuration"]
+        assert cfg["roles"] == cfg["role_configs"][selected]
+
+    @allure.title("an unknown selected_roles_configuration raises")
+    def test_unknown_selection_raises(self):
+        bad = {"role_configs": {"max_quality": {"user_intent": "claude_sonnet"}},
+               "selected_roles_configuration": "does_not_exist"}
+        with pytest.raises(ValueError):
+            mcp_files._apply_selected_roles(bad)
+
+    @allure.title("env SELECTED_ROLES_CONFIGURATION overrides the YAML selector")
+    def test_env_override(self, monkeypatch):
+        monkeypatch.setenv("SELECTED_ROLES_CONFIGURATION", "local_offline")
+        mcp_files.read_routing.cache_clear()
+        try:
+            cfg = mcp_files.read_routing()
+            assert cfg["roles"] == cfg["role_configs"]["local_offline"]
+        finally:
+            mcp_files.read_routing.cache_clear()  # drop the env-influenced cache entry
+
+
 # --- app client prompt-name derivation ------------------------------------------------
 
 

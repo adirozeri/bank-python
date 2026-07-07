@@ -5,6 +5,7 @@ owns. Kept separate from ``server.py`` so the file/parse logic can be unit-teste
 the MCP layer stays a thin wrapper.
 """
 
+import os
 from functools import lru_cache
 from pathlib import Path
 
@@ -21,7 +22,30 @@ PROMPTS_DIR = CONFIG_DIR / "prompts"
 def read_routing() -> dict:
     """Load and cache the routing file (llms catalog + role->llm map + personas)."""
     with open(ROUTING_PATH) as fh:
-        return yaml.safe_load(fh)
+        cfg = yaml.safe_load(fh)
+    _apply_selected_roles(cfg)
+    return cfg
+
+
+def _apply_selected_roles(cfg: dict) -> None:
+    """Resolve the active ``roles`` map from the named role configurations.
+
+    New schema: ``role_configs: {name: {role: llm}}`` plus ``selected_roles_configuration: name``.
+    This sets ``cfg['roles']`` to the selected configuration so every downstream consumer (which
+    reads ``cfg['roles']``) is unchanged. The env var ``SELECTED_ROLES_CONFIGURATION`` overrides
+    the YAML's selector, so a config can be switched without editing (or rebuilding) the file. A
+    legacy top-level ``roles:`` with no ``role_configs`` is left as-is.
+    """
+    configs = cfg.get("role_configs")
+    if not configs:
+        return  # legacy single-map form: cfg already has `roles`
+    selected = os.getenv("SELECTED_ROLES_CONFIGURATION") or cfg.get("selected_roles_configuration")
+    if selected not in configs:
+        raise ValueError(
+            f"selected_roles_configuration {selected!r} is not defined in role_configs "
+            f"(available: {sorted(configs)})"
+        )
+    cfg["roles"] = configs[selected]
 
 
 @lru_cache

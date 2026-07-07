@@ -144,12 +144,12 @@ class TestFactory:
             assert isinstance(model, BaseChatModel)
             assert type(model).__name__ == _PROVIDER_CLASS[provider_for(role)]
 
-    @allure.title("Catalog params (e.g. llm3 max_tokens) reach the built model")
+    @allure.title("Catalog params (e.g. groq_llama33_70b max_tokens) reach the built model")
     def test_catalog_params_applied(self):
         # Build directly from a known catalog entry, independent of role assignment.
         cfg = load_llm_config()
-        if "llm3" in cfg["llms"]:
-            assert cfg["llms"]["llm3"].get("max_tokens") == 1024
+        if "groq_llama33_70b" in cfg["llms"]:
+            assert cfg["llms"]["groq_llama33_70b"].get("max_tokens") == 1024
 
     @allure.title("get_llm raises on an unknown role")
     def test_get_llm_unknown_role(self):
