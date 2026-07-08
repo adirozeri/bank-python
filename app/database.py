@@ -22,7 +22,19 @@ SessionLocal = sessionmaker(bind=engine, autoflush=False)
 # runs identically everywhere and only "splits" once a Snowflake URL is provided.
 ANALYTICS_URL = os.getenv("ANALYTICS_URL")
 if ANALYTICS_URL:
-    analytics_engine = create_engine(url=ANALYTICS_URL, pool_pre_ping=True)
+    # Snowflake auth tokens expire on long-running processes. client_session_keep_alive sends a
+    # heartbeat so the session/token keeps renewing instead of expiring while idle, and
+    # pool_recycle drops any connection older than an hour so a stale (post-token) one is never
+    # reused — otherwise reads fail with "390114 Authentication token has expired".
+    _analytics_connect_args = (
+        {"client_session_keep_alive": True} if ANALYTICS_URL.startswith("snowflake") else {}
+    )
+    analytics_engine = create_engine(
+        url=ANALYTICS_URL,
+        pool_pre_ping=True,
+        pool_recycle=3600,
+        connect_args=_analytics_connect_args,
+    )
     AnalyticsSession = sessionmaker(bind=analytics_engine, autoflush=False)
 else:
     analytics_engine = engine
