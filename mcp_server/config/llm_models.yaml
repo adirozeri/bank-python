@@ -129,9 +129,76 @@ role_configs:
     user_intent: ollama_llama31_8b
     risk_analysis: ollama_llama31_8b
     judge: ollama_llama31_8b
+#from claude.ai#####################################################################################################
+# Cheap-but-sharp: free models do the grunt work, Claude only judges. The final
+  # verdict is where quality matters most, so you pay for 1 of 3 calls instead of 3.
+  # Cross-vendor by design (Groq risk vs Claude judge). NOT free — Claude judge costs,
+  # but far cheaper than max_quality.
+  quality_judge:
+    user_intent: gemini_flash
+    risk_analysis: groq_llama33_70b
+    judge: claude_sonnet
 
+  # All-Gemini, Pro on the hard call. Single vendor, so no cross-vendor debias, but
+  # Pro's stronger reasoning goes where it counts (judge) while Flash keeps intent/risk
+  # cheap and high-volume. Free, BUT Pro's free quota is much tighter than Flash's
+  # (low RPM/RPD) — the judge is your bottleneck here.
+  gemini_pro_judge:
+    user_intent: gemini_flash
+    risk_analysis: gemini_flash
+    judge: gemini_pro
+
+  # All-Groq, blazing fast. 8B for chat, 70B for risk + judge. Same vendor for risk and
+  # judge (no bias separation), but throughput and daily limits are excellent.
+  # Totally free (Groq free tier; limits are org-level, extra keys don't raise them).
+  groq_only:
+    user_intent: groq_llama31_8b
+    risk_analysis: groq_llama33_70b
+    judge: groq_llama33_70b
+
+  # Max vendor diversity to cut correlated errors: three different providers, each role
+  # isolated. Reasoning model (R1) scores risk, Groq judges cross-vendor, Gemini-lite
+  # drives. Strongest debias story of the free configs; R1 is slower/verbose.
+  # Totally free.
+  max_diversity_free:
+    user_intent: gemini_flash_lite
+    risk_analysis: openrouter_deepseek_r1
+    judge: groq_llama33_70b
+
+  # Daily-volume workhorse. Cerebras 70B does the heavy lifting (best free tokens/day,
+  # ~2,000 tok/s) for risk + judge; Groq 8B for fast cheap intent. Good for batch runs.
+  # Same-vendor risk/judge (no debias). Totally free (open weights only, no card).
+  volume_free:
+    user_intent: groq_llama31_8b
+    risk_analysis: cerebras_llama33_70b
+    judge: cerebras_llama33_70b
+
+  # Reasoning on the final verdict: R1 judges, cross-vendor from the Groq risk scorer.
+  # Complements reasoning_free (which puts R1 on risk) — use this when judgement calls
+  # are the nuanced part. Totally free; R1 is slower and emits reasoning tokens.
+  reasoning_judge_free:
+    user_intent: gemini_flash
+    risk_analysis: groq_llama33_70b
+    judge: openrouter_deepseek_r1
+
+  # Local-first hybrid: the chatty intent role runs on-machine (unlimited, private, no
+  # rate limits), while risk + judge use free cloud for better quality. Free, but needs
+  # `ollama serve` running; risk/judge still hit the network, so NOT fully offline.
+  local_hybrid:
+    user_intent: ollama_llama31_8b
+    risk_analysis: groq_llama33_70b
+    judge: gemini_flash
+
+  # EU data-residency leaning: Mistral (EU-hosted, GDPR-friendly) drives + judges, local
+  # Ollama scores risk on-machine. Free on Mistral's Experiment tier BUT it trains on
+  # your prompts — don't send anything sensitive to the Mistral (intent/judge) calls.
+  # Keeping risk local limits what leaves the box. Needs `ollama serve`.
+  eu_hosted:
+    user_intent: mistral_small
+    risk_analysis: ollama_llama31_8b
+    judge: mistral_small
 # Which configuration is live (override with env SELECTED_ROLES_CONFIGURATION).
-selected_roles_configuration: max_quality
+selected_roles_configuration: fastest_free
 
 # Persona key -> prompt file under prompts/persona/<name>.md. Controls user-facing tone.
 personas:
