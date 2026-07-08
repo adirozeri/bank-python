@@ -1,34 +1,22 @@
 # Allure Reporting
 
-Rich, browsable test reports for the pytest suite (roadmap Phase 4 §4.1). `allure-pytest`
-writes machine-readable **results** during a test run; the separate **`allure` CLI** (a JVM
-tool) renders them into an interactive HTML report.
+Rich, browsable test reports for the pytest suite. `allure-pytest` (pip) **writes** machine-readable
+results during a run; the separate **`allure` CLI** (a Java tool) **renders** them into HTML. Two
+tools, two jobs — installing one without the other is the usual "where's my report?" cause.
 
 ```
-pytest ──> allure-results/ (JSON + attachments) ──> allure CLI ──> allure-report/ (HTML)
+pytest ──> allure-results/ ──> allure CLI ──> allure-report/ (HTML)
 ```
 
-## What's wired up
+`pytest.ini` sets `--alluredir=allure-results --clean-alluredir`, so **`allure-results/` only ever
+holds the latest run** (it's wiped at the start of each run). On its own, Allure keeps no past runs.
+This doc sets up a workflow that **keeps the full results of every run** so you can see a test fail
+in one run and pass in a later one — with the reason for each.
 
-| Where | What it does |
-|-------|--------------|
-| `requirements-dev.txt` | `pytest`, `pytest-html`, `allure-pytest` (test-only; not in the prod image). |
-| `pytest.ini` | `addopts = ... --alluredir=allure-results --clean-alluredir` — every run writes fresh Allure results. |
-| `tests/conftest.py` | `_allure_environment` fixture writes `allure-results/environment.properties` (Python, DB URL, model) for the report's Environment widget. (Also keeps the existing `pytest-html` per-run report under `tests/reports/`.) |
-| `tests/test_llm.py` | `@allure.epic/feature/story/title/step` annotations + `allure.attach(...)` for generated SQL/rows and assistant replies. |
-| `.gitignore` | `allure-results/` and `allure-report/` are ignored — never commit them. |
+## Install the Allure CLI (one time)
 
-## One-time setup
+Needs Java (Java 21 is already installed here). Tarball method (no Node needed):
 
-### 1. Python deps
-```bash
-pip install -r requirements-dev.txt
-```
-
-### 2. The Allure CLI (needs Java — Java 21 is already installed here)
-The CLI is a Java app distributed separately from the pip plugin. Pick one:
-
-**Tarball (no Node required) — how this repo was set up:**
 ```bash
 VER=2.34.1
 curl -fsSL "https://repo.maven.apache.org/maven2/io/qameta/allure/allure-commandline/${VER}/allure-commandline-${VER}.tgz" -o /tmp/allure.tgz
@@ -37,73 +25,66 @@ ln -sf ~/.local/allure/bin/allure ~/.local/bin/allure   # ensure ~/.local/bin is
 allure --version
 ```
 
-**Alternatives:**
+(Alternatives: `npm install -g allure-commandline`, `brew install allure`, `scoop install allure`.)
+
+## Keep every run: the workflow
+
+Run the tests, then immediately run the report script — **before the next `pytest`**, which wipes
+`allure-results/`:
+
 ```bash
-npm install -g allure-commandline      # if you have Node
-brew install allure                    # macOS
-scoop install allure                   # Windows
+ASK_EVAL=1 ASK_EVAL_N=50 pytest tests/test_ask_evaluation.py -v   # writes allure-results/ (this run only)
+scripts/allure_report.sh                                          # capture it + build the report
 ```
 
-> If `allure: command not found`, add the CLI to your PATH, e.g.
-> `export PATH="$HOME/.local/bin:$PATH"` (put it in your shell profile to persist).
+`scripts/allure_report.sh` captures the fresh `allure-results/` three ways and opens the report:
 
-## Daily workflow
+| Step | Folder | Purpose |
+|------|--------|---------|
+| **Archive** | `allure-archive/<timestamp>/` | Full snapshot of this single run — replay it in isolation anytime. |
+| **Accumulate** | `allure-accumulate/` | Growing union of ALL runs' JSONs. The report groups each test's past executions as **Retries** (failure + later pass, each with full detail). |
+| **Trend** | `allure-report/history/` | Carried forward each run so the **Trend** graph compounds. |
+
+The combined report is generated from `allure-accumulate/`, so it always shows the complete history.
+
+### The folders
+
+- `allure-results/` — transient; **latest run only** (pytest rewrites it every run).
+- `allure-archive/<ts>/` — one immutable snapshot per run.
+- `allure-accumulate/` — every run's results merged; the source of the combined report.
+- `allure-report/` — the generated HTML (regenerated each time).
+
+All four are git-ignored — never commit them.
+
+## Viewing
 
 ```bash
-# 1. Run the tests — results land in allure-results/ automatically (via pytest.ini)
-pytest
+# The combined "keep everything" report (Retries = each test's fail->pass history, + Trend):
+scripts/allure_report.sh          # generate from allure-accumulate/ and open
 
-# 2a. Quick look: build a temp report and open it in the browser
+# Replay ONE past run in full (pick a timestamp folder):
+allure serve allure-archive/2026-07-08_10-00-00
+
+# Quick throwaway look at just the latest run:
 allure serve allure-results
-
-# 2b. Or produce a persistent static report
-allure generate allure-results -o allure-report --clean
-allure open allure-report
 ```
 
-`serve` is best for local iteration (ephemeral); `generate` + `open` produces a saved
-`allure-report/` you can archive or hand off.
+In the combined report, open a test and expand **Retries** to see each past execution — its status,
+failure message, and attachments (for `/ask` eval tests: the summary, judge rubric, and all N call
+payloads). The **Trend** widget on the overview shows pass/fail across runs.
 
-## Reading the report
+> The report shows *that* a test failed then passed and the failure/pass detail — but not *why* it
+> was fixed. The code change lives in **git**. (The enterprise tool that links runs to commits and
+> stores every run natively is **Allure TestOps**; not set up here.)
 
-- **Behaviors** — tests grouped by the `@allure.epic → @feature → @story` hierarchy. Here:
-  `Unit tests → LLM SDK → {Answer formatting, Read helpers, Money transfer (HITL)}`.
-- **Suites** — grouping by file/class/module.
-- A test's detail pane shows its `@allure.title`, the `with allure.step(...)` timeline, and
-  **Attachments** — e.g. the SQL + rows from `_query_transactions`/`_query_balance`, or the
-  assistant's reply from a `_create_transfer` branch.
-- **Severity** — transfer tests are tagged `CRITICAL`/`BLOCKER` via `@allure.severity`.
-- **Environment** — Python version, `DATABASE_URL`, `LLM_MODEL` (from the conftest fixture).
+## What's wired in
 
-## Adding annotations to new tests
+| Where | What |
+|-------|------|
+| `requirements-dev.txt` | `pytest`, `pytest-html`, `allure-pytest` (test-only, not in the prod image). |
+| `pytest.ini` | `--alluredir=allure-results --clean-alluredir` — fresh results each run. |
+| `tests/conftest.py` | writes `allure-results/environment.properties` (Python, DB URL, model) for the Environment widget. |
+| `tests/*.py` | `@allure.epic/feature/story/title` + `allure.attach(...)` annotations (cosmetic; never affect pass/fail). |
 
-```python
-import allure
-
-@allure.epic("Unit tests")
-@allure.feature("LLM SDK")
-@allure.story("My area")
-class TestThing:
-    @allure.title("Human-readable test name")
-    @allure.severity(allure.severity_level.CRITICAL)
-    def test_x(self):
-        with allure.step("Arrange / act phase"):
-            sql, rows = do_thing()
-        allure.attach(sql, "SQL", allure.attachment_type.TEXT)
-        allure.attach(json.dumps(rows, default=str), "rows", allure.attachment_type.JSON)
-        assert ...
-```
-
-All annotations are cosmetic — they shape the report only and never affect pass/fail.
-
-## Notes & gotchas
-
-- **Two tools, two responsibilities:** `allure-pytest` (pip) only *writes* results; rendering
-  *always* needs the `allure` CLI (Java). Installing one without the other is the usual
-  "where's my report?" cause.
-- `--clean-alluredir` clears `allure-results/` at the start of each run, so the report always
-  reflects the latest run. Trend/history across runs would require copying
-  `allure-report/history/` back into `allure-results/` before regenerating (not set up here).
-- CI publishing is intentionally **not** configured yet (roadmap §4.1 last box). When added,
-  a job would `pip install -r requirements-dev.txt`, run `pytest`, then upload/publish
-  `allure-report/`.
+CI publishing isn't configured yet. When added, the standard move is a GitHub Actions/Jenkins Allure
+step that persists the report (and its `history/`) automatically — no manual archiving.

@@ -20,6 +20,8 @@ venv/
 # Allure (Phase 4)
 allure-results/
 allure-report/
+allure-accumulate/
+allure-archive/
 
 # pytest-html per-run reports
 tests/reports/
